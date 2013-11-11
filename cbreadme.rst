@@ -95,10 +95,10 @@ Edit ``app.yaml`` and add the following lines to the ``libraries`` section:
 
 ::
 
-  -name: django
-   version: "1.4"
-  -name: lxml
-   version: "2.3"
+  - name: django
+    version: "1.4"
+  - name: lxml
+    version: "2.3"
 
 Edit ``appengine_config.py`` and locate the definition of the
 ``THIRD_PARTY_LIBS`` list (near ine 63). Add the following lines at the end of
