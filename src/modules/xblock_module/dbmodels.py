@@ -16,7 +16,6 @@
 
 __author__ = 'John Orr (jorr@google.com)'
 
-import json
 from models import entities
 from google.appengine.ext import db
 

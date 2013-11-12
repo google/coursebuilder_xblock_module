@@ -29,14 +29,15 @@ import cgi
 from cStringIO import StringIO
 import mimetypes
 import os
+import tarfile
 import urllib
+from xml.etree import cElementTree
 
 import appengine_xblock_runtime.runtime
 from common import safe_dom
 from common import schema_fields
 from common import tags
 from controllers import utils
-import dbmodels
 import django.conf
 import django.template.loader
 from lxml import etree
@@ -54,6 +55,7 @@ import xblock.core
 import xblock.fields
 import xblock.fragment
 
+import dbmodels
 import messages
 
 from google.appengine.ext import db
@@ -182,9 +184,9 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
         block.export_xml(child)
 
     def query(self, block):
-        # pylint: disable-msg=protected-access
+        # pylint: disable=protected-access
         return workbench.runtime._BlockSet(self, [block])
-        # pylint: enable-msg=protected-access
+        # pylint: enable=protected-access
 
     def handler_url(self, block, handler_name, suffix='', query=''):
         return self.handler.canonicalize_url('%s?%s' % (
@@ -281,24 +283,33 @@ class RootUsageDao(m_models.BaseJsonDao):
 
 # XBlock editor section
 
+EDITOR_HANDLERS = ['add_xblock', 'edit_xblock', 'import_xblock']
+
 
 def _add_editor_to_dashboard():
+    for handler in EDITOR_HANDLERS:
+        dashboard.DashboardHandler.get_actions.append(handler)
+        setattr(
+            dashboard.DashboardHandler, 'get_%s' % handler,
+            globals()['_get_%s' % handler])
+
     dashboard.DashboardHandler.contrib_asset_listers.append(list_xblocks)
-    dashboard.DashboardHandler.get_add_xblock = _get_add_xblock
-    dashboard.DashboardHandler.get_edit_xblock = _get_edit_xblock
-    dashboard.DashboardHandler.get_actions.extend(['add_xblock', 'edit_xblock'])
     dashboard.DashboardHandler.child_routes.append(
         [XBlockEditorRESTHandler.URI, XBlockEditorRESTHandler])
+    dashboard.DashboardHandler.child_routes.append(
+        [XBlockArchiveRESTHandler.URI, XBlockArchiveRESTHandler])
 
 
 def _remove_editor_from_dashboard():
+    for handler in EDITOR_HANDLERS:
+        dashboard.DashboardHandler.get_actions.remove(handler)
+        delattr(dashboard.DashboardHandler, 'get_%s' % handler)
+
     dashboard.DashboardHandler.contrib_asset_listers.remove(list_xblocks)
-    del dashboard.DashboardHandler.get_add_xblock
-    del dashboard.DashboardHandler.get_edit_xblock
-    dashboard.DashboardHandler.get_actions.remove('add_xblock')
-    dashboard.DashboardHandler.get_actions.remove('edit_xblock')
     dashboard.DashboardHandler.child_routes.remove(
         [XBlockEditorRESTHandler.URI, XBlockEditorRESTHandler])
+    dashboard.DashboardHandler.child_routes.remove(
+        [XBlockArchiveRESTHandler.URI, XBlockArchiveRESTHandler])
 
 
 def list_xblocks(the_dashboard):
@@ -306,7 +317,17 @@ def list_xblocks(the_dashboard):
     if not filer.is_editable_fs(the_dashboard.app_context):
         return safe_dom.NodeList()
 
-    output = safe_dom.NodeList().append(
+    output = safe_dom.NodeList()
+
+    if not courses.Course(the_dashboard).get_units():
+        output.append(
+            safe_dom.Element(
+                'a', className='gcb-button gcb-pull-right',
+                href='dashboard?action=import_xblock'
+            ).add_text('Import')
+        )
+
+    output.append(
         safe_dom.Element(
             'a', className='gcb-button gcb-pull-right',
             href='dashboard?action=add_xblock'
@@ -372,6 +393,28 @@ def _get_edit_xblock(the_dashboard):
         the_dashboard, key=the_dashboard.request.get('key'),
         title=messages.EDIT_XBLOCK_TITLE,
         description=messages.EDIT_XBLOCK_DESCRIPTION)
+
+
+def _get_import_xblock(the_dashboard):
+    """Render the screen for uploading an XBlock course tar.gx file."""
+    rest_url = the_dashboard.canonicalize_url(XBlockArchiveRESTHandler.URI)
+    exit_url = the_dashboard.canonicalize_url('/dashboard?action=assets')
+
+    main_content = oeditor.ObjectEditor.get_html_for(
+        the_dashboard,
+        XBlockArchiveRESTHandler.SCHEMA.get_json_schema(),
+        XBlockArchiveRESTHandler.SCHEMA.get_schema_dict(),
+        None, rest_url, exit_url,
+        delete_url=None,
+        auto_return=True,
+        save_method='upload',
+        save_button_caption='Import',
+        required_modules=XBlockArchiveRESTHandler.REQUIRED_MODULES)
+    template_values = {
+        'page_title': messages.IMPORT_COURSE_PAGE_TITLE,
+        'page_description': messages.IMPORT_COURSE_PAGE_DESCRIPTION,
+        'main_content': main_content}
+    the_dashboard.render_page(template_values)
 
 
 class XBlockEditorRESTHandler(utils.BaseRESTHandler):
@@ -459,10 +502,10 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
 
         try:
             rt = Runtime(self)
-            usage_id = rt.parse_xml_string(payload['xml'])
-        except Exception as e:  # pylint: disable-msg=broad-except
-            transforms.send_json_response(
-            self, 412, str(e))
+            usage_id = rt.parse_xml_string(
+                unicode(payload['xml']).encode('utf_8'))
+        except Exception as e:  # pylint: disable=broad-except
+            transforms.send_json_response(self, 412, str(e))
             return
 
         root_usage = RootUsageDto(
@@ -487,6 +530,255 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
         # TODO(jorr): Remove the tree from the UsageStore?
         RootUsageDao.delete(RootUsageDto(key, {}))
         transforms.send_json_response(self, 200, 'Deleted.')
+
+
+class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
+    """Provide the REST API for importing XBlock archives."""
+
+    URI = '/rest/xblock_archive'
+
+    SCHEMA = schema_fields.FieldRegistry('XBlock', description='XBlock XML')
+    SCHEMA.add_property(
+        schema_fields.SchemaField(
+            'file', 'File', 'string', optional=True,
+            description=messages.XBLOCK_ARCHIVE_FIELD,
+            extra_schema_dict_values={'_type': 'file'}))
+    SCHEMA.add_property(
+        schema_fields.SchemaField(
+            'dry_run', 'Dry Run', 'boolean', optional=True,
+            description=messages.XBLOCK_ARCHIVE_DRY_RUN))
+
+    REQUIRED_MODULES = ['inputex-file', 'io-upload-iframe', 'inputex-checkbox']
+
+    XSRF_TOKEN = 'xblock-import'
+
+    def get(self):
+        """Provide empty inital content for import editor."""
+        transforms.send_json_response(
+            self, 200, 'Success',
+            payload_dict={'file': ''},
+            xsrf_token=utils.XsrfTokenManager.create_xsrf_token(
+                self.XSRF_TOKEN))
+
+    def post(self):
+        assert courses.is_editable_fs(self.app_context)
+
+        request = transforms.loads(self.request.get('request'))
+        if not self.assert_xsrf_token_or_fail(
+                request, self.XSRF_TOKEN, {'key': ''}):
+            return
+
+        if (not unit_lesson_editor.CourseOutlineRights.can_edit(self) or
+            not filer.FilesRights.can_add(self)):
+
+            transforms.send_json_file_upload_response(
+                self, 401, 'Access denied.')
+            return
+
+        try:
+            payload = transforms.json_to_dict(
+                transforms.loads(request.get('payload')),
+                self.SCHEMA.get_json_schema_dict())
+        except ValueError as err:
+            transforms.send_json_file_upload_response(self, 412, str(err))
+            return
+
+        dry_run = payload.get('dry_run', False)
+
+        upload = self.request.POST['file']
+
+        if not isinstance(upload, cgi.FieldStorage):
+            transforms.send_json_file_upload_response(
+                self, 403, 'No file specified.')
+            return
+
+        try:
+            archive = tarfile.open(fileobj=upload.file, mode='r:gz')
+        except Exception as e:  # pylint: disable=broad-except
+            transforms.send_json_file_upload_response(
+                self, 412, 'Unable to read the archive file: %s' % e)
+            return
+
+        try:
+            course = courses.Course(self)
+            rt = Runtime(self)
+            importer = Importer(
+                archive=archive, course=course, fs=self.app_context.fs.impl,
+                rt=rt, dry_run=dry_run)
+            importer.parse()
+
+            validation_errors = importer.validate()
+            if validation_errors:
+                transforms.send_json_file_upload_response(
+                    self, 412,
+                    'Import failed: %s' % '\n'.join(validation_errors))
+                return
+
+            importer.do_import()
+
+            if dry_run:
+                transforms.send_json_file_upload_response(
+                    self, 412, # Status 412 needed to prevent page auto-return
+                    'Upload successfully validated')
+                return
+
+            course.save()
+
+        except Exception as e:  # pylint: disable=broad-except
+            transforms.send_json_file_upload_response(
+                self, 412, 'Import failed: %s' % e)
+            return
+        finally:
+            archive.close()
+
+        transforms.send_json_file_upload_response(self, 200, 'Saved.')
+
+
+class BadImportException(Exception):
+    """Exception raised when in Importer."""
+    pass
+
+
+class Importer(object):
+    """Manages the import of an XBlock archive file."""
+
+    def __init__(
+            self, archive=None, course=None, fs=None, rt=None, dry_run=False):
+        self.archive = archive
+        self.course = course
+        self.fs = fs
+        self.rt = rt
+        self.dry_run = dry_run
+        self.base = self._get_base_folder_name()
+        self.course_root = None
+
+    def parse(self):
+        """Assemble the XML files in the archive into a single DOM."""
+        course_file = self.archive.extractfile('%s/course.xml' % self.base)
+        self.course_root = self._walk_tree(
+            cElementTree.parse(course_file).getroot())
+
+    def validate(self):
+        """Check that the course structure is compatible with CB."""
+        errors = []
+
+        # the root must be a course
+        if self.course_root.tag != 'course':
+            errors.append('There is no root course tag.')
+
+        # The immediate children must be chapters
+        for child in self.course_root:
+            if child.tag != 'chapter':
+                errors.append('All content must be in chapters.')
+                break
+            # The grandchildren must be sequentials
+            for grandchild in child:
+                if grandchild.tag != 'sequential':
+                    errors.append('Chapters may only contain sequentials.')
+                    break
+
+        return errors
+
+    def do_import(self):
+        """Perform the import and create resources in CB."""
+        for chapter in self.course_root:
+            unit = self._create_unit(chapter)
+            for sequential in chapter:
+                self._create_lesson(unit, sequential)
+
+        self._load_static_files()
+
+    def _get_base_folder_name(self):
+        for member in self.archive.getmembers():
+            if member.isdir() and '/' not in member.name:
+                return member.name
+        return None
+
+    def _walk_tree(self, node):
+        if 'url_name' in node.attrib:
+            # If the node refers to another file. open it and merge it in
+            target_path = '%s/%s/%s.xml' % (
+                self.base, node.tag, node.attrib['url_name'])
+            target_file = self.archive.extractfile(target_path)
+            return self._walk_tree(cElementTree.parse(target_file).getroot())
+        elif node.tag == 'html':
+            if 'filename' in node.attrib:
+                # If the node is an <html/> block with externalized content,
+                # read it in.
+                target_path = '%s/html/%s.html' % (
+                    self.base, node.attrib['filename'])
+                target_file = self.archive.extractfile(target_path)
+                node.append(
+                    tags.html_string_to_element_tree(target_file.read()))
+                del node.attrib['filename']
+            self._rebase_html_refs(node)
+            return node
+        else:
+            for index, child in enumerate(node):
+                new_child = self._walk_tree(child)
+                node.remove(child)
+                node.insert(index, new_child)
+            return node
+
+    def _rebase_html_refs(self, node):
+        """Rebase HTML references based on /static to use CB namespace."""
+        for attr in ['href', 'src']:
+            if node.attrib.get(attr, '').startswith('/static/'):
+                node.attrib[attr] = 'assets/img%s' % node.attrib[attr]
+        for child in node:
+            self._rebase_html_refs(child)
+
+    def _create_unit(self, chapter):
+        assert chapter.tag == 'chapter'
+        unit = self.course.add_unit()
+        unit.title = chapter.attrib['display_name']
+        return unit
+
+    def _create_lesson(self, unit, sequential):
+        def _get_xml(node):
+            xml_buffer = StringIO()
+            cElementTree.ElementTree(element=node).write(xml_buffer)
+            return xml_buffer.getvalue()
+
+        assert sequential.tag == 'sequential'
+
+        # create the lesson
+        lesson = self.course.add_lesson(unit)
+        lesson.title = sequential.attrib['display_name']
+
+        # create the xblock asset
+        usage_id = self.rt.parse_xml_string(_get_xml(sequential))
+        description = 'Unit %s, Lesson %s: %s' % (
+            unit.index, lesson.index, lesson.title)
+        root_usage = RootUsageDto(
+            None, {'description': description, 'usage_id': usage_id})
+        root_id = RootUsageDao.save(root_usage) if not self.dry_run else 'xxx'
+
+        # insert the xblock asset into lesson content
+        lesson.objectives = '<xblock root_id="%s"></xblock>' % root_id
+
+        return lesson
+
+    def _load_static_files(self):
+        for member in self.archive.getmembers():
+            if member.isfile() and member.name.startswith(
+                    '%s/static/' % self.base):
+                self._insert_file(member)
+
+    def _insert_file(self, member):
+        """Extract the tarfile member into /assets/img/static."""
+        path = '/assets/img/%s' % member.name[len(self.base) + 1:]
+        path = self.fs.physical_to_logical(path)
+
+        if self.fs.isfile(path):
+            raise BadImportException('File already exists: %s' % member.name)
+
+        if member.size > filer.MAX_ASSET_UPLOAD_SIZE_K * 1024:
+            raise BadImportException(
+                'Cannot upload files bigger than %s K' %
+                filer.MAX_ASSET_UPLOAD_SIZE_K)
+        if not self.dry_run:
+            self.fs.put(path, self.archive.extractfile(member))
 
 
 # XBlock component tag section

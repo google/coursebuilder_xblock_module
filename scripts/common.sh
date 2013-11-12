@@ -87,11 +87,20 @@ checkout_gae_xblock_lib() {
   cd ../../../..
 }
 
+install_cb_xblock_lib() {
+  cd examples/coursebuilder/lib
+  cp -r ../../../cb-xblocks-core .
+  cd cb-xblocks-core
+  python setup.py egg_info
+  cd ../../../..
+}
+
 require_course_builder() {
   if [ ! -d examples/coursebuilder ]; then
     checkout_course_builder
     checkout_xblock
     checkout_gae_xblock_lib
+    install_cb_xblock_lib
   fi
 }
 
@@ -126,7 +135,6 @@ install_requirements() {
 start_local_server() {
   install_requirements
   cd examples/coursebuilder
-  ../google_appengine/dev_appserver.py .
+  ../google_appengine/dev_appserver.py $1 .
   cd ..
 }
-

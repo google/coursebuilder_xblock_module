@@ -22,4 +22,5 @@
 
 . scripts/common.sh
 
-start_local_server
+# Start the local server, passing command line flags to dev_appserver.py
+start_local_server "$*"

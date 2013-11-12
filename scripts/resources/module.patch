@@ -30,13 +30,14 @@ diff --git a/coursebuilder/appengine_config.py b/coursebuilder/appengine_config.
 index bbe8d44..1ef19ff 100755
 --- a/coursebuilder/appengine_config.py
 +++ b/coursebuilder/appengine_config.py
-@@ -73,6 +73,9 @@ THIRD_PARTY_LIBS = [
+@@ -73,6 +73,10 @@ THIRD_PARTY_LIBS = [
      # .zip repackaged from .tar.gz download.
      _Library('python-gflags-2.0.zip', relative_path='python-gflags-2.0'),
      _Library('pyparsing-1.5.7.zip'),
 +    _Library('appengine_xblock_runtime'),
 +    _Library('XBlock'),
-+    _Library(os.path.join('XBlock', 'thumbs'))
++    _Library(os.path.join('XBlock', 'thumbs')),
++    _Library('cb-xblocks-core')
  ]
  
  

@@ -1,0 +1,17 @@
+<div class="sequence_block" data-position="{{position}}">
+  <ul class="sequence_nav">
+    <li class="prev"><a href="javascript:void(0)"></a></li>
+    {% for nav_item in nav_items %}
+      <li class="nav_button {{nav_item.icon_class}}">
+        <a data-index="{{loop.index0}}" href="javascript:void(0)"></a>
+      </li>
+    {% endfor %}
+    <li class="next"><a href="javascript:void(0)"></a></li>
+  </ul>
+  
+  <div class="content">
+    {% for child in children %}
+      <div class="hidden">{{ child.body_html() | safe }}</div>
+    {% endfor %}
+  </div>
+</div>

@@ -26,3 +26,8 @@ EDIT_XBLOCK_DESCRIPTION = 'Edit an XBlock definition'
 XBLOCK_INSTANCE = 'XBlock instance'
 
 XBLOCK_DESCRIPTION_FIELD = 'Shown when selecting the XBlock'
+
+IMPORT_COURSE_PAGE_TITLE = 'Import XBlock Course'
+IMPORT_COURSE_PAGE_DESCRIPTION = 'Import an XBlock course into Course Builder'
+XBLOCK_ARCHIVE_FIELD = 'A tar.gz file containing an exported XBlock course'
+XBLOCK_ARCHIVE_DRY_RUN = 'Validate the archive but do not install it'
