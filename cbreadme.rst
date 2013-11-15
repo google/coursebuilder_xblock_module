@@ -101,7 +101,7 @@ Edit ``app.yaml`` and add the following lines to the ``libraries`` section:
     version: "2.3"
 
 Edit ``appengine_config.py`` and locate the definition of the
-``THIRD_PARTY_LIBS`` list (near ine 63). Add the following lines at the end of
+``THIRD_PARTY_LIBS`` list (near line 63). Add the following lines at the end of
 the list:
 
  ::
