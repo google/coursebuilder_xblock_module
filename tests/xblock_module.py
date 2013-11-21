@@ -18,6 +18,7 @@ __author__ = 'jorr@google.com (John Orr)'
 
 from cStringIO import StringIO
 import urllib
+import urlparse
 from xml.etree import cElementTree
 
 from controllers import sites
@@ -31,18 +32,23 @@ from google.appengine.api import namespace_manager
 
 
 def insert_thumbs_block():
-    rt = xblock_module.WorkbenchRuntime()
+    rt = xblock_module.Runtime(MockHandler())
     usage_id = rt.parse_xml_string('<thumbs/>')
     data = {'description': 'an xblock', 'usage_id': usage_id}
     root_usage = xblock_module.RootUsageDto(None, data)
     return xblock_module.RootUsageDao.save(root_usage)
 
 
-class WorkbenchRuntimeTestCase(actions.TestBase):
+class MockHandler(object):
+    def canonicalize_url(self, location):
+        return '/new_course' + location
+
+
+class RuntimeTestCase(actions.TestBase):
 
     def test_runtime_exports_blocks_with_ids(self):
         """The XBlock runtime should include block ids in XML exports."""
-        rt = xblock_module.WorkbenchRuntime()
+        rt = xblock_module.Runtime(MockHandler())
         usage_id = rt.parse_xml_string('<slider/>')
         xml = '<slider usage_id="%s"/>' % usage_id
 
@@ -53,7 +59,7 @@ class WorkbenchRuntimeTestCase(actions.TestBase):
 
     def test_runtime_imports_blocks_with_ids(self):
         """The workbench should update blocks in place when they have ids."""
-        rt = xblock_module.WorkbenchRuntime()
+        rt = xblock_module.Runtime(MockHandler())
         usage_id = rt.parse_xml_string('<html>foo</html>')
         self.assertEqual('foo', rt.get_block(usage_id).content)
 
@@ -63,7 +69,7 @@ class WorkbenchRuntimeTestCase(actions.TestBase):
         self.assertEqual('bar', rt.get_block(usage_id).content)
 
     def test_rendered_blocks_have_js_dependencies_included(self):
-        rt = xblock_module.WorkbenchRuntime(student_id='s23')
+        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         usage_id = rt.parse_xml_string('<slider/>')
         block = rt.get_block(usage_id)
         frag = rt.render(block, 'student_view')
@@ -71,13 +77,27 @@ class WorkbenchRuntimeTestCase(actions.TestBase):
         self.assertIn('js/vendor/jquery.cookie.js', frag.foot_html())
         self.assertIn('js/runtime/1.js', frag.foot_html())
 
+    def test_handler_url(self):
+        xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
+            xblock_module.XBLOCK_XSRF_TOKEN_NAME)
+        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
+        usage_id = rt.parse_xml_string('<thumbs/>')
+        block = rt.get_block(usage_id)
+        url = urlparse.urlparse(rt.handler_url(block, 'vote'))
+        self.assertEqual('/new_course/modules/xblock_module/handler', url.path)
+        query = urlparse.parse_qs(url.query)
+        self.assertEqual(block.scope_ids.usage_id, query['usage'][0])
+        self.assertEqual('vote', query['handler'][0])
+        self.assertEqual(xsrf_token, query['xsrf_token'][0])
+
 
 class XBlockActionHandlerTestCase(actions.TestBase):
     """Functional tests for the XBlock callback handler."""
 
     def test_post(self):
         actions.login('user@example.com')
-        rt = xblock_module.WorkbenchRuntime(student_id='user@example.com')
+        rt = xblock_module.Runtime(
+            MockHandler(), student_id='user@example.com')
         usage_id = rt.parse_xml_string('<thumbs/>')
         self.assertEqual(0, rt.get_block(usage_id).upvotes)
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
@@ -96,7 +116,8 @@ class XBlockActionHandlerTestCase(actions.TestBase):
     def test_post_bad_xsrf_rejected(self):
         """Callbacks with bad XSRF token should be rejected."""
         actions.login('user@example.com')
-        rt = xblock_module.WorkbenchRuntime(student_id='user@example.com')
+        rt = xblock_module.Runtime(
+            MockHandler(), student_id='user@example.com')
         usage_id = rt.parse_xml_string('<thumbs/>')
 
         params = {
@@ -110,7 +131,7 @@ class XBlockActionHandlerTestCase(actions.TestBase):
         self.assertEqual(400, response.status_int)
 
     def test_post_without_user_rejected(self):
-        rt = xblock_module.WorkbenchRuntime()
+        rt = xblock_module.Runtime(MockHandler())
         usage_id = rt.parse_xml_string('<thumbs/>')
 
         params = {
@@ -262,7 +283,8 @@ class XBlockEditorRESTHandlerTestCase(actions.TestBase):
 
         # Confirm the block was stored
         root_usage = xblock_module.RootUsageDao.load(root_usage_id)
-        block = xblock_module.WorkbenchRuntime().get_block(root_usage.usage_id)
+        block = xblock_module.Runtime(
+            MockHandler()).get_block(root_usage.usage_id)
         self.assertEqual('test html', block.content)
 
     def test_put_fails_with_bad_xsrf_token(self):

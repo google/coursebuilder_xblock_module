@@ -70,11 +70,12 @@ XBLOCK_XSRF_TOKEN_NAME = 'xblock_handler'
 # XBlock runtime section
 
 
-class WorkbenchRuntime(appengine_xblock_runtime.runtime.Runtime):
+class Runtime(appengine_xblock_runtime.runtime.Runtime):
     """A XBlock runtime which uses the App Engine datastore."""
 
-    def __init__(self, *args, **kwargs):
-        super(WorkbenchRuntime, self).__init__(*args, **kwargs)
+    def __init__(self, handler, *args, **kwargs):
+        super(Runtime, self).__init__(*args, **kwargs)
+        self.handler = handler
 
     def render_template(self, template_name, **kwargs):
         """Loads the django template for `template_name."""
@@ -169,18 +170,28 @@ class WorkbenchRuntime(appengine_xblock_runtime.runtime.Runtime):
         return workbench.runtime._BlockSet(self, [block])
         # pylint: enable-msg=protected-access
 
+    def handler_url(self, block, handler_name, suffix='', query=''):
+        return self.handler.canonicalize_url('%s?%s' % (
+            HANDLER_URI, urllib.urlencode({
+                'usage': block.scope_ids.usage_id,
+                'handler': handler_name,
+                'xsrf_token': utils.XsrfTokenManager.create_xsrf_token(
+                    XBLOCK_XSRF_TOKEN_NAME)})))
+
     def resources_url(self, resource):
         return '%s/%s' % (XBLOCK_RESOURCES_URI, resource)
 
 
 class XBlockActionHandler(utils.BaseHandler):
-    def post(self):
+
+    def _handle_request(self):
         def fix_ajax_request_body(body):
             # The XBlock ajax clients send JSON strings in the POST body, but if
             # the content-type is not explicitly set to application/json then
             # the handler receives name=value pairs in url-encoded
             # strings.
-            return urllib.unquote(body[:-1]) if body[-1] == '=' else body
+            return urllib.unquote(
+                body[:-1]) if body and body[-1] == '=' else body
 
         if self.get_user() is None:
             self.error(403)
@@ -196,12 +207,18 @@ class XBlockActionHandler(utils.BaseHandler):
         usage_id = self.request.get('usage')
         handler_name = self.request.get('handler')
 
-        rt = WorkbenchRuntime(student_id=student_id)
+        rt = Runtime(self, student_id=student_id)
         block = rt.get_block(usage_id)
         self.request.body = fix_ajax_request_body(self.request.body)
         response = block.runtime.handle(block, handler_name, self.request)
         self.response.body = response.body
         self.response.headers.update(response.headers)
+
+    def get(self):
+        self._handle_request()
+
+    def post(self):
+        self._handle_request()
 
 
 # Data model section
@@ -363,7 +380,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
         payload_dict = {'xml': '', 'description': ''}
         if key:
             root_usage = RootUsageDao.load(key)
-            rt = WorkbenchRuntime()
+            rt = Runtime(self)
             block = rt.get_block(root_usage.usage_id)
             xml_buffer = StringIO()
             rt.export_to_xml(block, xml_buffer)
@@ -421,7 +438,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
             return
 
         try:
-            rt = WorkbenchRuntime()
+            rt = Runtime(self)
             usage_id = rt.parse_xml_string(payload['xml'])
         except Exception as e:  # pylint: disable-msg=broad-except
             transforms.send_json_response(
@@ -489,7 +506,7 @@ class XBlockTag(tags.ContextAwareTag):
         root_id = node.attrib.get('root_id')
         usage_id = RootUsageDao.load(root_id).usage_id
         student_id = context.handler.get_user().user_id()
-        runtime = WorkbenchRuntime(student_id=student_id)
+        runtime = Runtime(context.handler, student_id=student_id)
         block = runtime.get_block(usage_id)
         fragment = runtime.render(block, 'student_view')
 
