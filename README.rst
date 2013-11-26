@@ -88,6 +88,36 @@ thumbs XBlock to a lesson:
   12. Click on your lesson name to view the content as a student.
 
 
+Adding new XBlocks
+------------------
+
+The following steps describe how to add new XBlocks so that they will be recognized
+by the XBlock module. They assume that you have packaged the XBlocks in a folder
+called ``my_xblocks`` which contains a ``setup.py`` file (similar to the thumbs XBlock
+that is included with the standard XBlock library).
+
+  1. Copy the ``my_xblocks`` folder into the ``lib/`` folder of your Course
+     Builder installation, so that you have a ``lib/my_xblocks`` folder that
+     contains a ``setup.py`` file.
+
+  2. In a terminal, execute the commands
+
+     ::
+
+       cd my_xblocks
+       python setup.py egg_info
+
+  3. In Course Builder, edit ``appengine_config.py`` and locate the definition of
+     the ``THIRD_PARTY_LIBS`` list (near line 63). Add the following line at the
+     end of the list:
+
+     ::
+
+       _Library('my_xblocks')
+
+  4. You can now use the added XBlocks in your Course Builder installation.
+
+
 Running the tests
 -----------------
 
