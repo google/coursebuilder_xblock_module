@@ -17,15 +17,19 @@
 __author__ = 'jorr@google.com (John Orr)'
 
 from cStringIO import StringIO
+import os
 import urllib
 import urlparse
 from xml.etree import cElementTree
 
 from controllers import sites
 from controllers import utils
+from models import courses
 from models import transforms
 from modules.xblock_module import xblock_module
 from tests.functional import actions
+from tests.functional import test_classes
+from tools.etl import etl
 from xblock import fragment
 
 from google.appengine.api import namespace_manager
@@ -44,13 +48,104 @@ class MockHandler(object):
         return '/new_course' + location
 
 
+class DataMigrationTests(actions.TestBase):
+    """Functional tests for data migration with import and ETL."""
+
+    def setUp(self):
+        super(DataMigrationTests, self).setUp()
+        self.old_namespace = namespace_manager.get_namespace()
+
+    def tearDown(self):
+        namespace_manager.set_namespace(self.old_namespace)
+        super(DataMigrationTests, self).tearDown()
+
+    def test_course_import(self):
+        """Confirm course import preserves XBlock data."""
+
+        sites.setup_courses('course:/a::ns_a, course:/b::ns_b, course:/:/')
+
+        app_context_a, app_context_b, _ = sites.get_all_courses()
+        course_a = courses.Course(None, app_context=app_context_a)
+        course_b = courses.Course(None, app_context=app_context_b)
+
+        # Switch to Course A and insert a CB XBlock usage
+        namespace_manager.set_namespace('ns_a')
+
+        rt = xblock_module.Runtime(MockHandler())
+        usage_id = rt.parse_xml_string('<html_demo>Text</html_demo>')
+        data = {'description': 'an xblock', 'usage_id': usage_id}
+        root_usage = xblock_module.RootUsageDto(None, data)
+        key = xblock_module.RootUsageDao.save(root_usage)
+
+        # Switch to Course B and import
+        namespace_manager.set_namespace('ns_b')
+        self.assertEqual(0, len(xblock_module.RootUsageDao.get_all()))
+
+        errors = []
+        course_b.import_from(app_context_a, errors)
+        if errors:
+            raise Exception(errors)
+
+        # Confirm the import worked
+        self.assertEqual(1, len(xblock_module.RootUsageDao.get_all()))
+        root_usage = xblock_module.RootUsageDao.load(key)
+        rt = xblock_module.Runtime(MockHandler())
+        block = rt.get_block(root_usage.usage_id)
+        self.assertEqual('html_demo', block.xml_element_name())
+        self.assertEqual('Text', block.content)
+
+    def test_etl_roundtrip(self):
+        """Confirm that XBlock data can be exported and imported with ETL."""
+
+        sites.setup_courses('course:/a::ns_a, course:/b::ns_b, course:/:/')
+
+        app_context_a, app_context_b, _ = sites.get_all_courses()
+        course_a = courses.Course(None, app_context=app_context_a)
+        course_b = courses.Course(None, app_context=app_context_b)
+
+        # Switch to Course A and insert a CB XBlock usage
+        namespace_manager.set_namespace('ns_a')
+
+        rt = xblock_module.Runtime(MockHandler())
+        usage_id = rt.parse_xml_string('<html_demo>Text</html_demo>')
+        data = {'description': 'an xblock', 'usage_id': usage_id}
+        root_usage = xblock_module.RootUsageDto(None, data)
+        key = xblock_module.RootUsageDao.save(root_usage)
+
+        # Switch to Course B and confirm there's no XBlock data yet
+        namespace_manager.set_namespace('ns_b')
+        self.assertEqual(0, len(xblock_module.RootUsageDao.get_all()))
+
+        # Download course data from Course A with ETL
+        archive_path = os.path.join(self.test_tempdir, 'archive.zip')
+        args = etl.PARSER.parse_args([
+            etl._MODE_DOWNLOAD, etl._TYPE_COURSE,
+            '--archive_path', archive_path, '/a', 'mycourse', 'localhost:8080'])
+        etl.main(args, environment_class=test_classes.FakeEnvironment)
+
+        # Upload the archive zip file into Course B with ETL
+        args = etl.PARSER.parse_args([
+            etl._MODE_UPLOAD, etl._TYPE_COURSE,
+            '--archive_path', archive_path, '/b', 'mycourse', 'localhost:8080'])
+        etl.main(args, environment_class=test_classes.FakeEnvironment)
+
+        # Confirm the XBlock data was migrated correctly
+        self.assertEqual(1, len(xblock_module.RootUsageDao.get_all()))
+        root_usage = xblock_module.RootUsageDao.load(key)
+        rt = xblock_module.Runtime(MockHandler())
+        block = rt.get_block(root_usage.usage_id)
+        self.assertEqual('html_demo', block.xml_element_name())
+        self.assertEqual('Text', block.content)
+
+
 class RuntimeTestCase(actions.TestBase):
+    """Functional tests for the XBlock runtime."""
 
     def test_runtime_exports_blocks_with_ids(self):
         """The XBlock runtime should include block ids in XML exports."""
         rt = xblock_module.Runtime(MockHandler())
-        usage_id = rt.parse_xml_string('<slider/>')
-        xml = '<slider usage_id="%s"/>' % usage_id
+        usage_id = rt.parse_xml_string('<slider_demo/>')
+        xml = '<slider_demo usage_id="%s"/>' % usage_id
 
         block = rt.get_block(usage_id)
         xml_buffer = StringIO()
@@ -60,17 +155,17 @@ class RuntimeTestCase(actions.TestBase):
     def test_runtime_imports_blocks_with_ids(self):
         """The workbench should update blocks in place when they have ids."""
         rt = xblock_module.Runtime(MockHandler())
-        usage_id = rt.parse_xml_string('<html>foo</html>')
+        usage_id = rt.parse_xml_string('<html_demo>foo</html_demo>')
         self.assertEqual('foo', rt.get_block(usage_id).content)
 
-        xml = '<html usage_id="%s">bar</html>' % usage_id
+        xml = '<html_demo usage_id="%s">bar</html_demo>' % usage_id
         new_usage_id = rt.parse_xml_string(xml)
         self.assertEqual(usage_id, new_usage_id)
         self.assertEqual('bar', rt.get_block(usage_id).content)
 
     def test_rendered_blocks_have_js_dependencies_included(self):
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
-        usage_id = rt.parse_xml_string('<slider/>')
+        usage_id = rt.parse_xml_string('<slider_demo/>')
         block = rt.get_block(usage_id)
         frag = rt.render(block, 'student_view')
         self.assertIn('js/vendor/jquery.min.js', frag.foot_html())
@@ -232,7 +327,7 @@ class XBlockEditorRESTHandlerTestCase(actions.TestBase):
 
     def get_request(
         self, xsrf_token, description='html block',
-        xml='<html>test html</html>'):
+        xml='<html_demo>test html</html_demo>'):
 
         request = {
             'key': '',
@@ -420,3 +515,14 @@ class XBlockResourceHandlerTestCase(actions.TestBase):
         response = self.get(
             '/modules/xblock_module/xblock_resources/css/workbench.css')
         self.assertEqual(200, response.status_int)
+
+
+class XBlockLocalResourceHandlerTestCase(actions.TestBase):
+    """Functional tests for the handler for XBlock local resources."""
+
+    def test_serves_xblock_local_resources(self):
+        response = self.get(
+            'modules/xblock_module/xblock_local_resources/equality_demo/public/'
+            'images/correct-icon.png')
+        self.assertEqual(200, response.status_int)
+        self.assertEqual('image/png', response.headers['Content-Type'])

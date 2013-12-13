@@ -27,17 +27,20 @@ __author__ = 'John Orr (jorr@google.com)'
 
 import cgi
 from cStringIO import StringIO
-import logging
+import mimetypes
 import os
 import urllib
+
 import appengine_xblock_runtime.runtime
 from common import safe_dom
 from common import schema_fields
 from common import tags
 from controllers import utils
+import dbmodels
 import django.conf
 import django.template.loader
 from lxml import etree
+from models import courses
 from models import custom_modules
 from models import transforms
 import models.models as m_models
@@ -45,11 +48,14 @@ from modules.dashboard import filer
 from modules.dashboard import unit_lesson_editor
 import modules.dashboard.dashboard as dashboard
 from modules.oeditor import oeditor
+import webapp2
 import workbench.runtime
 import xblock.core
 import xblock.fields
 import xblock.fragment
+
 import messages
+
 from google.appengine.ext import db
 
 
@@ -57,6 +63,8 @@ from google.appengine.ext import db
 RESOURCES_URI = '/modules/xblock_module/resources'
 # Base URI routing used by Course Builder for XBlock static resources
 XBLOCK_RESOURCES_URI = '/modules/xblock_module/xblock_resources'
+# Base URI routing used by Course Builder for XBlock static resources
+XBLOCK_LOCAL_RESOURCES_URI = '/modules/xblock_module/xblock_local_resources'
 # URI routing used by Course Builder for call-backs to server-side XBlock code
 HANDLER_URI = '/modules/xblock_module/handler'
 
@@ -181,6 +189,10 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
     def resources_url(self, resource):
         return '%s/%s' % (XBLOCK_RESOURCES_URI, resource)
 
+    def local_resource_url(self, block, uri):
+        return '%s/%s/%s' % (
+            XBLOCK_LOCAL_RESOURCES_URI, block.scope_ids.block_type, uri)
+
 
 class XBlockActionHandler(utils.BaseHandler):
 
@@ -195,7 +207,7 @@ class XBlockActionHandler(utils.BaseHandler):
 
         if self.get_user() is None:
             self.error(403)
-            return;
+            return
         student_id = self.get_user().user_id()
 
         token = self.request.get('xsrf_token')
@@ -540,6 +552,24 @@ class XBlockResourcesHandler(tags.ResourcesHandler):
             os.path.normpath(path[len(XBLOCK_RESOURCES_URI) + 1:]))
 
 
+class XBlockLocalResourceHandler(webapp2.RequestHandler):
+    """Router for requests for a block's local resources."""
+
+    def get(self, block_type, resource):
+        xblock_class = xblock.core.XBlock.load_class(block_type)
+
+        mimetype = mimetypes.guess_type(resource)[0]
+        if mimetype is None:
+            mimetype = 'application/octet-stream'
+
+        self.response.status = 200
+        self.response.headers['Content-Type'] = mimetype
+        self.response.cache_control.no_cache = None
+        self.response.cache_control.public = 'public'
+        self.response.cache_control.max_age = 600
+        self.response.write(xblock_class.open_local_resource(resource).read())
+
+
 # Module registration section
 
 
@@ -552,6 +582,10 @@ def register_module():
     def on_module_disabled():
         _remove_editor_from_dashboard()
         tags.Registry.remove_tag_binding(XBlockTag.binding_name)
+        for entity in  [
+                dbmodels.DefinitionEntity, dbmodels.UsageEntity,
+                dbmodels.KeyValueEntity, RootUsageEntity]:
+            courses.COURSE_CONTENT_ENTITIES.remove(entity)
 
     def on_module_enabled():
         _add_editor_to_dashboard()
@@ -560,10 +594,16 @@ def register_module():
         if not django.conf.settings.configured:
             django.conf.settings.configure(
                 TEMPLATE_DIRS=[XBLOCK_TEMPLATES_PATH])
+        courses.COURSE_CONTENT_ENTITIES += [
+            dbmodels.DefinitionEntity, dbmodels.UsageEntity,
+            dbmodels.KeyValueEntity, RootUsageEntity]
 
     global_routes = [
         (RESOURCES_URI + '/.*', tags.ResourcesHandler),
-        (XBLOCK_RESOURCES_URI + '/.*', XBlockResourcesHandler)]
+        (XBLOCK_RESOURCES_URI + '/.*', XBlockResourcesHandler),
+        (
+            XBLOCK_LOCAL_RESOURCES_URI + r'/([^/]*)/(.*)',
+            XBlockLocalResourceHandler)]
 
     namespaced_routes = [(HANDLER_URI, XBlockActionHandler)]
 
