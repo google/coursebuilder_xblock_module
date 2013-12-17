@@ -117,21 +117,29 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             wrapped.add_javascript_url(
                 self.resources_url('js/runtime/%s.js' % frag.js_init_version))
             wrapped.add_javascript_url(RESOURCES_URI + '/runtime.js')
-            data['init'] = frag.js_init_fn
-            data['runtime-version'] = frag.js_init_version
-            data['usage'] = block.scope_ids.usage_id
-            data['block-type'] = block.scope_ids.block_type
-            data['xsrf-token'] = utils.XsrfTokenManager.create_xsrf_token(
-                XBLOCK_XSRF_TOKEN_NAME)
+            data = {
+                'data-init': frag.js_init_fn,
+                'data-runtime-version': str(frag.js_init_version),
+                'data-usage': block.scope_ids.usage_id,
+                'data-block-type': block.scope_ids.block_type,
+                'data-xsrf-token': utils.XsrfTokenManager.create_xsrf_token(
+                    XBLOCK_XSRF_TOKEN_NAME)}
 
         if block.name:
-            data['name'] = block.name
+            data['data-name'] = block.name
 
-        html = u'<div class="xblock"%s>%s</div>' % (
-            ''.join(' data-%s="%s"' % item for item in data.items()),
-            frag.body_html(),
-        )
-        wrapped.add_content(html)
+        class FragmentText(safe_dom.Text):
+            """Class to insert the fragment content into the safe_dom node."""
+            def __init__(self, value):
+                self._value = unicode(value)
+            @property
+            def sanitized(self):
+                return self._value
+
+        div = safe_dom.Element('div', className='xblock', **data)
+        div.add_child(FragmentText(frag.body_html()))
+
+        wrapped.add_content(unicode(div))
         wrapped.add_frag_resources(frag)
         return wrapped
 
