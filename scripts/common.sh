@@ -31,7 +31,7 @@ XBLOCK_GIT_REV=ad196d339ba484a70e797edca2686a36dbd634d9
 
 GAE_XBLOCK_LIB_GIT_URL=https://github.com/google/appengine_xblock_runtime.git
 GAE_XBLOCK_LIB_REPO_NAME=appengine_xblock_runtime
-GAE_XBLOCK_LIB_GIT_REV=ef3ab41ddc7f766f5ad18a0b1b5ff78133e9eed1
+GAE_XBLOCK_LIB_GIT_REV=0159cf946f43f36daf2196276eceeb7c7cb4fa21
 
 GAE_URL=http://googleappengine.googlecode.com/files/google_appengine_1.8.2.zip
 

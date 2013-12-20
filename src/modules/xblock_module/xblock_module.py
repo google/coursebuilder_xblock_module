@@ -34,6 +34,7 @@ import urllib
 from xml.etree import cElementTree
 
 import appengine_xblock_runtime.runtime
+import appengine_xblock_runtime.store
 from common import safe_dom
 from common import schema_fields
 from common import tags
@@ -52,8 +53,10 @@ from modules.oeditor import oeditor
 import webapp2
 import workbench.runtime
 import xblock.core
+import xblock.field_data
 import xblock.fields
 import xblock.fragment
+import xblock.runtime
 
 import dbmodels
 import messages
@@ -80,11 +83,48 @@ XBLOCK_XSRF_TOKEN_NAME = 'xblock_handler'
 # XBlock runtime section
 
 
+class StudentFieldData(xblock.field_data.SplitFieldData):
+    """A field data manager for use in student (i.e., non-admin) context.
+
+    This field data manager prevents students from modifying a field which is
+    stored as UserScope.NONE, even if an XBlock includes code which sets it.
+    Thus it defends against poorly-written XBlocks which grant students too
+    wide permissions.
+    """
+
+    def __init__(self, db_data):
+
+        authored_data = xblock.field_data.ReadOnlyFieldData(db_data)
+        student_data = db_data
+
+        super(StudentFieldData, self).__init__({
+            xblock.fields.Scope.content: authored_data,
+            xblock.fields.Scope.settings: authored_data,
+            xblock.fields.Scope.parent: authored_data,
+            xblock.fields.Scope.children: authored_data,
+            xblock.fields.Scope.user_state_summary: student_data,
+            xblock.fields.Scope.user_state: student_data,
+            xblock.fields.Scope.user_info: student_data,
+            xblock.fields.Scope.preferences: student_data})
+
+
 class Runtime(appengine_xblock_runtime.runtime.Runtime):
     """A XBlock runtime which uses the App Engine datastore."""
 
-    def __init__(self, handler, *args, **kwargs):
-        super(Runtime, self).__init__(*args, **kwargs)
+    def __init__(self, handler, student_id=None, is_admin=False):
+
+        db_data = xblock.runtime.DbModel(
+            appengine_xblock_runtime.store.KeyValueStore())
+
+        if is_admin:
+            field_data = db_data
+        elif student_id:
+            field_data = StudentFieldData(db_data)
+        else:
+            field_data = xblock.field_data.ReadOnlyFieldData(db_data)
+
+        super(Runtime, self).__init__(
+            field_data=field_data, student_id=student_id)
         self.handler = handler
 
     def render_template(self, template_name, **kwargs):
@@ -132,8 +172,10 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
 
         class FragmentText(safe_dom.Text):
             """Class to insert the fragment content into the safe_dom node."""
+
             def __init__(self, value):
                 self._value = unicode(value)
+
             @property
             def sanitized(self):
                 return self._value
@@ -443,7 +485,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
         payload_dict = {'xml': '', 'description': ''}
         if key:
             root_usage = RootUsageDao.load(key)
-            rt = Runtime(self)
+            rt = Runtime(self, is_admin=True)
             block = rt.get_block(root_usage.usage_id)
             xml_buffer = StringIO()
             rt.export_to_xml(block, xml_buffer)
@@ -501,7 +543,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
             return
 
         try:
-            rt = Runtime(self)
+            rt = Runtime(self, is_admin=True)
             usage_id = rt.parse_xml_string(
                 unicode(payload['xml']).encode('utf_8'))
         except Exception as e:  # pylint: disable=broad-except
@@ -601,7 +643,7 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
 
         try:
             course = courses.Course(self)
-            rt = Runtime(self)
+            rt = Runtime(self, is_admin=True)
             importer = Importer(
                 archive=archive, course=course, fs=self.app_context.fs.impl,
                 rt=rt, dry_run=dry_run)

@@ -40,7 +40,7 @@ from google.appengine.api import namespace_manager
 
 
 def insert_thumbs_block():
-    rt = xblock_module.Runtime(MockHandler())
+    rt = xblock_module.Runtime(MockHandler(), is_admin=True)
     usage_id = rt.parse_xml_string('<thumbs/>')
     data = {'description': 'an xblock', 'usage_id': usage_id}
     root_usage = xblock_module.RootUsageDto(None, data)
@@ -75,7 +75,7 @@ class DataMigrationTests(actions.TestBase):
         # Switch to Course A and insert a CB XBlock usage
         namespace_manager.set_namespace('ns_a')
 
-        rt = xblock_module.Runtime(MockHandler())
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<html_demo>Text</html_demo>')
         data = {'description': 'an xblock', 'usage_id': usage_id}
         root_usage = xblock_module.RootUsageDto(None, data)
@@ -110,7 +110,7 @@ class DataMigrationTests(actions.TestBase):
         # Switch to Course A and insert a CB XBlock usage
         namespace_manager.set_namespace('ns_a')
 
-        rt = xblock_module.Runtime(MockHandler())
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<html_demo>Text</html_demo>')
         data = {'description': 'an xblock', 'usage_id': usage_id}
         root_usage = xblock_module.RootUsageDto(None, data)
@@ -147,7 +147,7 @@ class RuntimeTestCase(actions.TestBase):
 
     def test_runtime_exports_blocks_with_ids(self):
         """The XBlock runtime should include block ids in XML exports."""
-        rt = xblock_module.Runtime(MockHandler())
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<slider_demo/>')
         xml = '<slider_demo usage_id="%s"/>' % usage_id
 
@@ -158,7 +158,7 @@ class RuntimeTestCase(actions.TestBase):
 
     def test_runtime_imports_blocks_with_ids(self):
         """The workbench should update blocks in place when they have ids."""
-        rt = xblock_module.Runtime(MockHandler())
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<html_demo>foo</html_demo>')
         self.assertEqual('foo', rt.get_block(usage_id).content)
 
@@ -168,8 +168,9 @@ class RuntimeTestCase(actions.TestBase):
         self.assertEqual('bar', rt.get_block(usage_id).content)
 
     def test_rendered_blocks_have_js_dependencies_included(self):
-        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<slider_demo/>')
+        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         block = rt.get_block(usage_id)
         frag = rt.render(block, 'student_view')
         self.assertIn('js/vendor/jquery.min.js', frag.foot_html())
@@ -179,8 +180,9 @@ class RuntimeTestCase(actions.TestBase):
     def test_handler_url(self):
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBLOCK_XSRF_TOKEN_NAME)
-        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<thumbs/>')
+        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         block = rt.get_block(usage_id)
         url = urlparse.urlparse(rt.handler_url(block, 'vote'))
         self.assertEqual('/new_course/modules/xblock_module/handler', url.path)
@@ -189,14 +191,34 @@ class RuntimeTestCase(actions.TestBase):
         self.assertEqual('vote', query['handler'][0])
         self.assertEqual(xsrf_token, query['xsrf_token'][0])
 
+    def test_runtime_prevents_student_writes_to_non_student_fields(self):
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
+        usage_id = rt.parse_xml_string('<html_demo>Test</html_demo>')
+
+        # Load the block in student role
+        rt = xblock_module.Runtime(MockHandler(), student_id='s23')
+        block = rt.get_block(usage_id)
+        self.assertEqual('Test', block.content)
+        block.content = 'Something else'
+        try:
+            block.save()
+            self.fail('Expected InvalidScopeError')
+        except xblock.exceptions.InvalidScopeError:
+            pass  # Expected exception
+
+        # Load the block in admin role
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
+        block = rt.get_block(usage_id)
+        block.content = 'Something else'
+        block.save()  # No exception
+
 
 class XBlockActionHandlerTestCase(actions.TestBase):
     """Functional tests for the XBlock callback handler."""
 
     def test_post(self):
         actions.login('user@example.com')
-        rt = xblock_module.Runtime(
-            MockHandler(), student_id='user@example.com')
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<thumbs/>')
         self.assertEqual(0, rt.get_block(usage_id).upvotes)
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
@@ -215,8 +237,7 @@ class XBlockActionHandlerTestCase(actions.TestBase):
     def test_post_bad_xsrf_rejected(self):
         """Callbacks with bad XSRF token should be rejected."""
         actions.login('user@example.com')
-        rt = xblock_module.Runtime(
-            MockHandler(), student_id='user@example.com')
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<thumbs/>')
 
         params = {
@@ -230,7 +251,7 @@ class XBlockActionHandlerTestCase(actions.TestBase):
         self.assertEqual(400, response.status_int)
 
     def test_post_without_user_rejected(self):
-        rt = xblock_module.Runtime(MockHandler())
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<thumbs/>')
 
         params = {
