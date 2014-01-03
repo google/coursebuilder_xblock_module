@@ -22,7 +22,7 @@ set -e
 
 GCB_GIT_URL=https://code.google.com/p/course-builder/
 GCB_REPO_NAME=course-builder
-GCB_GIT_REV=2d7551d4becf
+GCB_GIT_REV=470496ff0416
 GCB_ZIP=https://course-builder.googlecode.com/files/coursebuilder_20130814_214936.zip
 
 XBLOCK_GIT_URL=https://github.com/edx/XBlock.git
@@ -52,7 +52,6 @@ checkout_course_builder() {
 
   # Patch GCB to run the XBlock module
   git apply ../../scripts/resources/module.patch
-  cp -a ../../src/modules/xblock_module coursebuilder/modules
 
   # Install coursebuilder in examples/
   mv coursebuilder ..
@@ -87,9 +86,15 @@ checkout_gae_xblock_lib() {
   cd ../../../..
 }
 
+install_cb_xblock_module() {
+  cd examples/coursebuilder/modules
+  ln -s ../../../src/modules/xblock_module
+  cd ../../..
+}
+
 install_cb_xblock_lib() {
   cd examples/coursebuilder/lib
-  cp -r ../../../cb-xblocks-core .
+  ln -s ../../../cb-xblocks-core
   cd cb-xblocks-core
   python setup.py egg_info
   cd ../../../..
@@ -100,6 +105,7 @@ require_course_builder() {
     checkout_course_builder
     checkout_xblock
     checkout_gae_xblock_lib
+    install_cb_xblock_module
     install_cb_xblock_lib
   fi
 }
