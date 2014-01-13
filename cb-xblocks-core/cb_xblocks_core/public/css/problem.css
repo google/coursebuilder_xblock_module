@@ -1,0 +1,161 @@
+.sr {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+}
+h2.problem-header {
+  display: inline-block;
+}
+section.problem-progress {
+  display: inline-block;
+padding-left: 5px;
+color: #999;
+font-weight: 100;
+font-size: 1.2em;
+}
+section.problem section.action .check,
+section.problem section.action .show {
+  height: 40px;
+  vertical-align: middle;
+  font-weight: 600;
+  -webkit-appearance: button;
+}
+section.problem div span.correct {
+  display: inline-block;
+  vertical-align: baseline;
+  zoom: 1;
+  position: relative;
+  top: 3px;
+  width: 25px;
+  height: 20px;
+  background: url("../../edx-platform/common/static/images/correct-icon.png") center center no-repeat;
+}
+section.problem div span.incorrect {
+  display: inline-block;
+  vertical-align: baseline;
+  zoom: 1;
+  position: relative;
+  top: 3px;
+  width: 25px;
+  height: 20px;
+  background: url("../../edx-platform/common/static/images/incorrect-icon.png") center center no-repeat;
+}
+section.problem div span.unanswered {
+  display: inline-block;
+  vertical-align: baseline;
+  zoom: 1;
+  position: relative;
+  top: 3px;
+  width: 25px;
+  height: 20px;
+  background: url("../../edx-platform/common/static/images/unanswered-icon.png") center center no-repeat;
+}
+section.problem input[type='text'] {
+  padding: 6px 8px 8px;
+  border: 1px solid #b2b2b2;
+  border-radius: 2px;
+}
+section.problem div.correct input {
+  border-color: green;
+}
+section.problem div.correct p.status {
+  display: inline-block;
+  vertical-align: baseline;
+  width: 20px;
+  height: 20px;
+  background: url("../../edx-platform/common/static/images/correct-icon.png") center center no-repeat;
+  text-indent: -9999px;
+}
+section.problem div.incorrect input {
+  border-color: red;
+}
+section.problem div.incorrect p.status {
+  display: inline-block;
+  vertical-align: baseline;
+  width: 20px;
+  height: 20px;
+  background: url("../../edx-platform/common/static/images/incorrect-icon.png") center center no-repeat;
+  text-indent: -9999px;
+}
+section.problem div.unanswered p.status {
+  display: inline-block;
+  vertical-align: baseline;
+  width: 20px;
+  height: 20px;
+  background: url("../../edx-platform/common/static/images/unanswered-icon.png") center center no-repeat;
+  text-indent: -9999px;
+}
+form.choicegroup div.indicator_container {
+  float: left;
+  width: 25px;
+  height: 1px;
+  margin-right: 15px;
+}
+form.choicegroup fieldset {
+  border: none;
+  border-left: 1px solid #ddd;
+  margin: 0 0 20px;
+  padding-left: 20px;
+}
+form.choicegroup label {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+form.choicegroup label.choicegroup_correct:after {
+  margin-left: 15px;
+  content: url('../../edx-platform/common/static/images/correct-icon.png')
+}
+form.choicegroup label.choicegroup_incorrect:after {
+  margin-left: 15px;
+  content: url('../../edx-platform/common/static/images/incorrect-icon.png')
+}
+section.problem div div.equation .MathJax_Display {
+  display: inline-block;
+  width: auto;
+  background-color: #eee;
+  border: solid 1px #ddd;
+  padding: 5px 8px;
+  border-radius: 2px;
+  font-size: 16px;
+  min-width: 30px;
+}
+section.problem .solution-span > span {
+  margin: 20px 0;
+  display: block;
+  border: 1px solid #ddd;
+  padding: 9px 15px 20px;
+  position: relative;
+  box-shadow: inset 0 0 0 1px #eee;
+  border-radius: 3px;
+}
+section.problem .solution-span > span:empty {
+  display:none;
+}
+section.problem div.detailed-solution > p:first-child {
+  color: #aaa;
+  text-transform: uppercase;
+  font-weight: bold;
+  font-style: normal;
+  font-size: 0.9em;
+}
+section.problem div p.answer {
+  display: inline-block;
+  vertical-align: baseline;
+  zoom: 1;
+  margin-bottom: 0;
+  margin-left: 10px;
+}
+section.problem div p.answer:before {
+  display: inline;
+  content: "Answer: ";
+  font-weight: bold;
+}
+section.problem div p.answer:empty:before {
+  display: none;
+}

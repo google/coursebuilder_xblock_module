@@ -26,11 +26,15 @@ GCB_GIT_REV=470496ff0416
 GCB_ZIP=https://course-builder.googlecode.com/files/coursebuilder_20130814_214936.zip
 
 XBLOCK_GIT_URL=https://github.com/edx/XBlock.git
-XBLOCK_GIT_REV=40a949eb934ddb7ec71cd6b935772500aec8bf1c
+XBLOCK_GIT_REV=de92d3bf798699a6bbd06b54012ef15934c41ac0
+
+EDX_PLATFORM_GIT_URL=https://github.com/edx/edx-platform.git
+EDX_PLATFORM_REPO_NAME=edx-platform
+EDX_PLATFORM_REV=87aa71c4506c421a775c2cb732b4b813836c283c
 
 GAE_XBLOCK_LIB_GIT_URL=https://github.com/google/appengine_xblock_runtime.git
 GAE_XBLOCK_LIB_REPO_NAME=appengine_xblock_runtime
-GAE_XBLOCK_LIB_GIT_REV=b599ce1981f9655bae8a151ab9ab1931e5ae5ea3
+GAE_XBLOCK_LIB_GIT_REV=e6101adb30ca9380d95bb60a1ee0cfd82da17b0c
 
 GAE_URL=http://googleappengine.googlecode.com/files/google_appengine_1.8.2.zip
 
@@ -40,7 +44,12 @@ clean_examples_folder() {
   rm -rf coursebuilder
   rm -rf google_appengine
   rm -rf webtest
+  rm -rf edx-platform
+  rm -rf node
+  rm -rf selenium
+  rm -rf chromedriver
   cd ..
+  rm -rf cb-xblocks-core/Course_Builder_Core_XBlocks.egg-info
 }
 
 checkout_course_builder() {
@@ -96,6 +105,68 @@ checkout_gae_xblock_lib() {
   cd ../../../..
 }
 
+checkout_edx_platform() {
+  cd examples
+  git clone $EDX_PLATFORM_GIT_URL
+  cd $EDX_PLATFORM_REPO_NAME
+  git checkout $EDX_PLATFORM_REV
+  cd ../..
+}
+
+cleanup_edx_platform() {
+  rm -rf examples/edx-platform
+}
+
+copy_required_files_from_edx_platform() {
+  src=examples/edx-platform
+  dest=examples/coursebuilder/lib/edx-platform
+
+  # Move core Capa libraries into CB lib folder
+  mkdir -p $dest/common/lib
+  mv $src/common/lib/calc/ $dest/common/lib
+  mv $src/common/lib/capa/ $dest/common/lib
+  mv $src/common/lib/chem/ $dest/common/lib
+  mv $src/common/lib/xmodule/ $dest/common/lib
+
+  edx_static=$src/common/static
+  cb_static=$dest/common/static
+
+  mkdir -p $cb_static/images
+  mv $edx_static/images/correct-icon.png $cb_static/images
+  mv $edx_static/images/incorrect-icon.png $cb_static/images
+  mv $edx_static/images/unanswered-icon.png $cb_static/images
+  mv $edx_static/images/spinner.gif $cb_static/images
+
+  mkdir -p $cb_static/js/capa/src
+  mv $edx_static/js/capa/src/formula_equation_preview.js $cb_static/js/capa/src
+
+  mkdir -p $cb_static/js/vendor
+  mv $edx_static/js/vendor/underscore-min.js $cb_static/js/vendor
+
+  edx_templates=$src/lms/templates
+  cb_templates=$dest/lms/templates
+  mkdir -p $cb_templates
+  mv $edx_templates/problem_ajax.html $edx_templates/problem.html $cb_templates
+}
+
+build_edx_coffeescript_files() {
+  require_coffeescript
+  coffee=examples/node/bin/coffee
+  coffee_out=examples/coursebuilder/lib/edx-platform/common/static/coffee
+  coffee_src=examples/coursebuilder/lib/edx-platform/common/lib/xmodule/xmodule/js/src
+
+  mkdir -p $coffee_out
+  $coffee --compile --output $coffee_out/capa/ $coffee_src/capa/display.coffee
+  $coffee --compile --output $coffee_out/ $coffee_src/javascript_loader.coffee
+}
+
+install_capa() {
+  checkout_edx_platform
+  copy_required_files_from_edx_platform
+  build_edx_coffeescript_files
+  cleanup_edx_platform
+}
+
 install_cb_xblock_module() {
   cd examples/coursebuilder/modules
   ln -s ../../../src/modules/xblock_module
@@ -110,13 +181,71 @@ install_cb_xblock_lib() {
   cd ../../../..
 }
 
+install_from_pypi() {
+  url=$1
+  base=`echo $url | sed 's/^.*\/\([^\/][^\/]*\)\.tar\.gz$/\1/'`
+  echo $url
+  echo $base
+
+  cd examples/coursebuilder/lib
+  wget $url
+  tar xzf $base.tar.gz
+  cd $base
+  zip -r ../$base.zip .
+  cd ..
+  rm -rf $base $base.tar.gz
+  cd ../../..
+}
+
+install_capa_deps() {
+  cd examples/coursebuilder/lib
+  ln -s ../../../capa_stubs
+  cd ../../..
+
+  downloads="\
+    https://pypi.python.org/packages/source/B/BeautifulSoup/BeautifulSoup-3.2.1.tar.gz \
+    https://pypi.python.org/packages/source/p/python-dateutil/python-dateutil-2.2.tar.gz \
+    https://pypi.python.org/packages/source/M/Mako/Mako-0.9.0.tar.gz \
+    https://pypi.python.org/packages/source/M/MarkupSafe/MarkupSafe-0.18.tar.gz \
+    https://pypi.python.org/packages/source/p/pyparsing/pyparsing-2.0.1.tar.gz \
+    https://pypi.python.org/packages/source/p/pytz/pytz-2013.9.tar.gz \
+    https://pypi.python.org/packages/source/P/PyYAML/PyYAML-3.10.tar.gz \
+    https://pypi.python.org/packages/source/s/six/six-1.5.2.tar.gz"
+
+  for url in $downloads
+  do
+    install_from_pypi $url
+  done
+
+  # Install version of nltk for GAE
+  cd examples/coursebuilder/lib
+  git clone https://github.com/rutherford/nltk-gae.git
+  cd nltk-gae
+  git checkout 9181f8991d0566e693f82d0bb0479219c3fc8768
+  rm -rf .git
+  zip -r ../nltk-gae.zip .
+  cd ..
+  rm -rf nltk-gae
+  cd ../../..
+
+  # Install MathJax
+  cd examples/coursebuilder/lib
+  git clone https://github.com/mathjax/MathJax.git
+  cd MathJax
+  git checkout f3aaf3a2a3e964df2770dc4aaaa9c87ce5f47e2c
+  rm -rf .git
+  cd ../../../..
+}
+
 require_course_builder() {
   if [ ! -d examples/coursebuilder ]; then
     checkout_course_builder
     checkout_xblock
+    install_capa
     checkout_gae_xblock_lib
     install_cb_xblock_module
     install_cb_xblock_lib
+    install_capa_deps
   fi
 }
 
@@ -142,15 +271,59 @@ require_webtest() {
   fi
 }
 
-install_requirements() {
+require_node() {
+  if [ ! -d examples/node ]; then
+    cd examples
+    wget http://nodejs.org/dist/v0.10.24/node-v0.10.24-linux-x86.tar.gz -O node-download.tgz
+    tar xzf node-download.tgz
+    mv node-v0.10.24-linux-x86 node
+    rm node-download.tgz
+    cd ..
+  fi
+  PATH="`pwd`/examples/node/bin":$PATH
+}
+
+require_coffeescript() {
+  require_node
+  if [ ! -e examples/node/bin/coffee ]; then
+    examples/node/bin/npm install -g coffee-script@1.6.1
+  fi
+}
+
+require_selenium() {
+  if [ ! -d examples/selenium ]; then
+    cd examples
+    wget https://pypi.python.org/packages/source/s/selenium/selenium-2.39.0.tar.gz -O selenium-download.tgz
+    tar xzf selenium-download.tgz
+    rm selenium-download.tgz
+    mv selenium-2.39.0 selenium
+    cd ..
+  fi
+
+  if [ ! -d examples/chromedriver ]; then
+  cd examples
+  wget http://chromedriver.storage.googleapis.com/2.8/chromedriver_linux64.zip -O chromedriver-download.zip
+  unzip chromedriver-download.zip -d chromedriver
+  chmod a+x chromedriver/chromedriver
+  rm chromedriver-download.zip
+  cd ..
+fi
+}
+
+install_run_requirements() {
   require_course_builder
   require_gae
+}
+
+install_test_requirements() {
+  install_run_requirements
   require_webtest
+  require_selenium
 }
 
 start_local_server() {
-  install_requirements
+  install_run_requirements
   cd examples/coursebuilder
-  ../google_appengine/dev_appserver.py $1 .
-  cd ..
+  ../google_appengine/dev_appserver.py --datastore_consistency_policy=consistent --max_module_instances=1 $1 .
+  cd ../..
 }

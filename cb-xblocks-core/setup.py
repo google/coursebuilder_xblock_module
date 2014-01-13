@@ -15,7 +15,8 @@ setup(
             'video = cb_xblocks_core.cb_xblocks_core:VideoBlock',
             'cbquestion = cb_xblocks_core.cb_xblocks_core:QuestionBlock',
             'html = cb_xblocks_core.cb_xblocks_core:HtmlBlock',
-            'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock'
+            'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock',
+            'problem = cb_xblocks_core.problem:ProblemBlock'
         ]
     }
 )

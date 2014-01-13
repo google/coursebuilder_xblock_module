@@ -99,6 +99,7 @@ class SequenceBlock(XBlock):
     @XBlock.json_handler
     def on_select(self, data, suffix=''):
         self.position = data.get('position', 0)
+        self.runtime.publish(self, {'position': self.position})
         return {'position': self.position}
 
 

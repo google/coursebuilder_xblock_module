@@ -9,21 +9,27 @@ XBlocks_ in course content.
 .. _XBlocks: https://github.com/edx/XBlock
 
 
+Requirements
+------------
+
+You will need a Bash environment to run the installation scripts. The scripts
+use standard developments tools, including Python 2.7, ``git``, and
+``zip``/``unzip``. In addition you must have the following Python packages
+installed: ``setuptools``, ``lxml``, ``numpy``.
+
+
 Running the example application locally
 ---------------------------------------
 
 To get started, the XBlock module can be run inside Course Builder on a local
-development server. To set up and run the application on common Linux
-distributions, execute:
+development server. To set up and run the application, execute:
 
 ::
 
   sh ./scripts/run_example.sh
 
 This will set up a copy of Course Builder in ``examples/`` with the XBlock
-module installed, and will start the App Engine development server. If this
-script cannot be run on your platform, follow the steps outlined in
-`cbreadme.rst <cbreadme.rst>`_.
+module installed, and will start the App Engine development server.
 
 
 Running the example application on production App Engine
@@ -44,19 +50,12 @@ Deploy with the command:
   ./examples/google_appengine/appcfg.py update examples/coursebuilder
 
 
-Adding the module to Course Builder
------------------------------------
-
-If you want to add the module to an existing copy of Course Builder, follow
-the instructions in `cbreadme.rst <cbreadme.rst>`_.
-
-
 Using XBlocks in Course Builder
 -------------------------------
 
 You can add XBlock content in XML form to the body of Course Builder lessons.
 The following example describes the steps to add a snippet of HTML text and a
-thumbs XBlock to a lesson:
+video XBlock to a lesson:
 
   1. Log on to Course Builder as an administrator.
   2. `Create a new course <https://code.google.com/p/course-builder/wiki/CreateNewCourse>`_
@@ -70,12 +69,10 @@ thumbs XBlock to a lesson:
 
     ::
 
-      <vertical>
-        <html>
-          Vote up or down on the content...
-        </html>
-        <thumbs/>
-      </vertical>
+      <sequential>
+        <html>Some text</html>
+        <video youtube_id_1_0="Kdg2drcUjYI"/>
+      </sequential>
 
   7. Enter a description, such as "Sample XBlock content" and click Save, then
      Close.
@@ -84,8 +81,38 @@ thumbs XBlock to a lesson:
   10. Click on the toolbox icon to embed a course component. Select
       "Embedded XBlocks" as the component type, and choose the description of
       the XBlock content you just added.
-  11. Save your lesson and click close to return to the dashboard.
+  11. Save your lesson and click Close to return to the dashboard.
   12. Click on your lesson name to view the content as a student.
+
+
+Importing Courses from edX Studio
+---------------------------------
+
+You can import course content created in edX Studio. Not all content that can
+be authored in Studio runs in Course Builder, but basic content including HTML,
+videos, and multiple choice questions is supported. The following steps show
+the process for importing a course from Studio:
+
+  1. Create your course in Studio.
+  2. In your Studio  course, select Tools > Export and save a copy of your
+     course as a ``.tar.gz`` file.
+  3. Log on to Course Builder as an administrator.
+  4. `Create a new course <https://code.google.com/p/course-builder/wiki/CreateNewCourse>`_
+     using the admin tab.
+  5. Go to the new course's
+     `Dashboard <https://code.google.com/p/course-builder/wiki/Dashboard>`_,
+     and select Assets.
+  6. Click the Import button in the XBlocks section.
+  7. Click Choose File and open the ``.tar.gz`` file which you downloaded from
+     Studio.
+  8. If you only want to confirm that this content can be imported to Course
+     Builder, without actually loading it, click the Dry Run box.
+  9. Click Import.
+
+After the import, Studio sections will correspond to Course Builder units, and
+Studio subsections will correspond to Course Builder lessons. Resources such as
+embedded images will be imported. There are also sample exported files which
+you can try in ``tests/resources/``.
 
 
 Adding new XBlocks
@@ -115,35 +142,25 @@ that is included with the standard XBlock library).
 
        _Library('my_xblocks')
 
-  4. You can now use the added XBlocks in your Course Builder installation.
+  4. In Course Builder, edit ``src/modules/xblock_module/xblock_module.py``
+     and locate the XBLOCK_WHITELIST list (new line 86). Add the line for your
+     XBlock from your XBlock's ``setup.py`` file. E.g.,
+
+     ::
+
+       myblock = my_package.my_module:MyBlockClass
+
+  5. You can now use the added XBlock in your Course Builder installation.
+
+If you are developing an XBlock then the above steps need only be performed
+once. Subsequent edits to your XBlock's code will be immediately available.
 
 
 Running the tests
 -----------------
 
-To run the tests on common Linux distributions, execute:
+To run the tests, execute:
 
 ::
 
     sh ./scripts/tests.sh
-
-If this script cannot be run on your platform, follow the steps in
-`Running the example application locally`_
-to set up a copy of Course Builder with the XBlock module installed.
-Ensure that the following packages are on your ```PYTHONPATH``:
-
-::
-
-    examples/coursebuilder
-    examples/webtest
-    examples/google_appengine
-    examples/google_appengine/lib/webob-1.2.3
-    examples/google_appengine/lib/webapp2-2.5.2
-    examples/google_appengine/lib/jinja2-2.6
-    examples/google_appengine/lib/fancy_urllib
-
-Then execute the tests with the following command:
-
-::
-
-    python -m unittest tests.xblock_module

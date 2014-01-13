@@ -13,7 +13,7 @@ diff --git a/coursebuilder/app.yaml b/coursebuilder/app.yaml
 index 5519fb0..812a0e8 100755
 --- a/coursebuilder/app.yaml
 +++ b/coursebuilder/app.yaml
-@@ -16,8 +16,12 @@ builtins:
+@@ -16,8 +16,14 @@ builtins:
  - deferred: on
  
  libraries:
@@ -23,6 +23,8 @@ index 5519fb0..812a0e8 100755
    version: "2.6"
 +- name: lxml
 +  version: "2.3"
++- name: numpy
++  version: "1.6.1"
  - name: webapp2
    version: "2.5.2"
  - name: webob
@@ -30,14 +32,28 @@ diff --git a/coursebuilder/appengine_config.py b/coursebuilder/appengine_config.
 index bbe8d44..1ef19ff 100755
 --- a/coursebuilder/appengine_config.py
 +++ b/coursebuilder/appengine_config.py
-@@ -73,6 +73,10 @@ THIRD_PARTY_LIBS = [
+@@ -73,6 +73,24 @@ THIRD_PARTY_LIBS = [
      # .zip repackaged from .tar.gz download.
      _Library('python-gflags-2.0.zip', relative_path='python-gflags-2.0'),
      _Library('pyparsing-1.5.7.zip'),
 +    _Library('appengine_xblock_runtime'),
 +    _Library('XBlock'),
 +    _Library(os.path.join('XBlock', 'thumbs')),
-+    _Library('cb-xblocks-core')
++    _Library('cb-xblocks-core'),
++    _Library(os.path.join('edx-platform', 'common', 'lib', 'calc')),
++    _Library(os.path.join('edx-platform', 'common', 'lib', 'capa')),
++    _Library(os.path.join('edx-platform', 'common', 'lib', 'chem')),
++    _Library(os.path.join('edx-platform', 'common', 'lib', 'xmodule')),
++    _Library('nltk-gae.zip'),
++    _Library('BeautifulSoup-3.2.1.zip'),
++    _Library('python-dateutil-2.2.zip'),
++    _Library('Mako-0.9.0.zip'),
++    _Library('MarkupSafe-0.18.zip'),
++    _Library('pyparsing-2.0.1.zip'),
++    _Library('pytz-2013.9.zip'),
++    _Library('PyYAML-3.10.zip'),
++    _Library('six-1.5.2.zip'),
++    _Library('capa_stubs')
  ]
  
  

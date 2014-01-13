@@ -27,6 +27,7 @@ __author__ = 'John Orr (jorr@google.com)'
 
 import cgi
 from cStringIO import StringIO
+import logging
 import mimetypes
 import os
 import tarfile
@@ -62,6 +63,7 @@ import xblock.runtime
 import dbmodels
 import messages
 
+from google.appengine.api import users
 from google.appengine.ext import db
 
 
@@ -86,7 +88,8 @@ XBLOCK_WHITELIST = [
     'video = cb_xblocks_core.cb_xblocks_core:VideoBlock',
     'cbquestion = cb_xblocks_core.cb_xblocks_core:QuestionBlock',
     'html = cb_xblocks_core.cb_xblocks_core:HtmlBlock',
-    'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock'
+    'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock',
+    'problem = cb_xblocks_core.problem:ProblemBlock'
 ]
 
 id_generator = appengine_xblock_runtime.runtime.IdGenerator()
@@ -159,9 +162,9 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
     def wrap_child(self, block, unused_view, frag, unused_context):
         wrapped = xblock.fragment.Fragment()
         wrapped.add_javascript_url(
-            self.resources_url('js/vendor/jquery.min.js'))
+            self.resource_url('js/vendor/jquery.min.js'))
         wrapped.add_javascript_url(
-            self.resources_url('js/vendor/jquery.cookie.js'))
+            self.resource_url('js/vendor/jquery.cookie.js'))
 
         data = {}
         if frag.js_init_fn:
@@ -181,7 +184,7 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
                 """)
 
             wrapped.add_javascript_url(
-                self.resources_url('js/runtime/%s.js' % frag.js_init_version))
+                self.resource_url('js/runtime/%s.js' % frag.js_init_version))
             wrapped.add_javascript_url(RESOURCES_URI + '/runtime.js')
             data = {
                 'data-init': frag.js_init_fn,
@@ -262,12 +265,23 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
                 'xsrf_token': utils.XsrfTokenManager.create_xsrf_token(
                     XBLOCK_XSRF_TOKEN_NAME)})))
 
-    def resources_url(self, resource):
+    def resource_url(self, resource):
         return '%s/%s' % (XBLOCK_RESOURCES_URI, resource)
 
     def local_resource_url(self, block, uri):
         return '%s/%s/%s' % (
             XBLOCK_LOCAL_RESOURCES_URI, block.scope_ids.block_type, uri)
+
+    def publish(self, block, event):
+        wrapper = {
+            'usage': block.scope_ids.usage_id,
+            'type': block.scope_ids.block_type,
+            'event': event}
+
+        m_models.EventEntity.record(
+            'xblock-event',
+            users.get_current_user(),
+            transforms.dumps(wrapper))
 
 
 class XBlockActionHandler(utils.BaseHandler):
@@ -691,6 +705,7 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
             course.save()
 
         except Exception as e:  # pylint: disable=broad-except
+            logging.exception('Import failed')
             transforms.send_json_file_upload_response(
                 self, 412, 'Import failed: %s' % e)
             return
