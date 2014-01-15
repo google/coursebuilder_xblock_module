@@ -14,8 +14,8 @@ setup(
             'sequential = cb_xblocks_core.cb_xblocks_core:SequenceBlock',
             'video = cb_xblocks_core.cb_xblocks_core:VideoBlock',
             'cbquestion = cb_xblocks_core.cb_xblocks_core:QuestionBlock',
-            'html = xblock.content:HtmlBlock',
-            'vertical = xblock.structure:VerticalBlock'
+            'html = cb_xblocks_core.cb_xblocks_core:HtmlBlock',
+            'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock'
         ]
     }
 )

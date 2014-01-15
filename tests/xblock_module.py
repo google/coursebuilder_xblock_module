@@ -22,7 +22,6 @@ import re
 import urllib
 import urlparse
 from xml.etree import cElementTree
-import webtest
 
 from controllers import sites
 from controllers import utils
@@ -33,15 +32,18 @@ from modules.xblock_module import xblock_module
 from tests.functional import actions
 from tests.functional import test_classes
 from tools.etl import etl
-from xblock import fragment
+import webtest
 import xblock
+from xblock import fragment
 
 from google.appengine.api import namespace_manager
+
+THUMBS_ENTRY_POINT = 'thumbs = thumbs:ThumbsBlock'
 
 
 def insert_thumbs_block():
     rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-    usage_id = rt.parse_xml_string('<thumbs/>')
+    usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
     data = {'description': 'an xblock', 'usage_id': usage_id}
     root_usage = xblock_module.RootUsageDto(None, data)
     return xblock_module.RootUsageDao.save(root_usage)
@@ -52,7 +54,24 @@ class MockHandler(object):
         return '/new_course' + location
 
 
-class DataMigrationTests(actions.TestBase):
+id_generator = xblock_module.id_generator
+
+
+class TestBase(actions.TestBase):
+    def setUp(self):
+        super(TestBase, self).setUp()
+        # Whitelist the thumbs block for testing
+        if THUMBS_ENTRY_POINT not in xblock_module.XBLOCK_WHITELIST:
+            xblock_module.XBLOCK_WHITELIST.append(THUMBS_ENTRY_POINT)
+
+    def tearDown(self):
+        if THUMBS_ENTRY_POINT in xblock_module.XBLOCK_WHITELIST:
+            xblock_module.XBLOCK_WHITELIST.remove(THUMBS_ENTRY_POINT)
+            xblock.core.XBlock._plugin_cache = None   # pylint: disable=protected-access
+        super(TestBase, self).tearDown()
+
+
+class DataMigrationTests(TestBase):
     """Functional tests for data migration with import and ETL."""
 
     def setUp(self):
@@ -76,7 +95,7 @@ class DataMigrationTests(actions.TestBase):
         namespace_manager.set_namespace('ns_a')
 
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html_demo>Text</html_demo>')
+        usage_id = rt.parse_xml_string('<html>Text</html>', id_generator)
         data = {'description': 'an xblock', 'usage_id': usage_id}
         root_usage = xblock_module.RootUsageDto(None, data)
         key = xblock_module.RootUsageDao.save(root_usage)
@@ -95,7 +114,7 @@ class DataMigrationTests(actions.TestBase):
         root_usage = xblock_module.RootUsageDao.load(key)
         rt = xblock_module.Runtime(MockHandler())
         block = rt.get_block(root_usage.usage_id)
-        self.assertEqual('html_demo', block.xml_element_name())
+        self.assertEqual('html', block.xml_element_name())
         self.assertEqual('Text', block.content)
 
     def test_etl_roundtrip(self):
@@ -111,7 +130,7 @@ class DataMigrationTests(actions.TestBase):
         namespace_manager.set_namespace('ns_a')
 
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html_demo>Text</html_demo>')
+        usage_id = rt.parse_xml_string('<html>Text</html>', id_generator)
         data = {'description': 'an xblock', 'usage_id': usage_id}
         root_usage = xblock_module.RootUsageDto(None, data)
         key = xblock_module.RootUsageDao.save(root_usage)
@@ -123,13 +142,13 @@ class DataMigrationTests(actions.TestBase):
         # Download course data from Course A with ETL
         archive_path = os.path.join(self.test_tempdir, 'archive.zip')
         args = etl.PARSER.parse_args([
-            etl._MODE_DOWNLOAD, etl._TYPE_COURSE,
+            etl._MODE_DOWNLOAD, etl._TYPE_COURSE, #  pylint: disable=protected-access
             '--archive_path', archive_path, '/a', 'mycourse', 'localhost:8080'])
         etl.main(args, environment_class=test_classes.FakeEnvironment)
 
         # Upload the archive zip file into Course B with ETL
         args = etl.PARSER.parse_args([
-            etl._MODE_UPLOAD, etl._TYPE_COURSE,
+            etl._MODE_UPLOAD, etl._TYPE_COURSE, #  pylint: disable=protected-access
             '--archive_path', archive_path, '/b', 'mycourse', 'localhost:8080'])
         etl.main(args, environment_class=test_classes.FakeEnvironment)
 
@@ -138,18 +157,18 @@ class DataMigrationTests(actions.TestBase):
         root_usage = xblock_module.RootUsageDao.load(key)
         rt = xblock_module.Runtime(MockHandler())
         block = rt.get_block(root_usage.usage_id)
-        self.assertEqual('html_demo', block.xml_element_name())
+        self.assertEqual('html', block.xml_element_name())
         self.assertEqual('Text', block.content)
 
 
-class RuntimeTestCase(actions.TestBase):
+class RuntimeTestCase(TestBase):
     """Functional tests for the XBlock runtime."""
 
     def test_runtime_exports_blocks_with_ids(self):
         """The XBlock runtime should include block ids in XML exports."""
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<slider_demo/>')
-        xml = '<slider_demo usage_id="%s"/>' % usage_id
+        usage_id = rt.parse_xml_string('<html>text</html>', id_generator)
+        xml = '<html usage_id="%s">text</html>' % usage_id
 
         block = rt.get_block(usage_id)
         xml_buffer = StringIO()
@@ -159,17 +178,17 @@ class RuntimeTestCase(actions.TestBase):
     def test_runtime_imports_blocks_with_ids(self):
         """The workbench should update blocks in place when they have ids."""
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html_demo>foo</html_demo>')
+        usage_id = rt.parse_xml_string('<html>foo</html>', id_generator)
         self.assertEqual('foo', rt.get_block(usage_id).content)
 
-        xml = '<html_demo usage_id="%s">bar</html_demo>' % usage_id
-        new_usage_id = rt.parse_xml_string(xml)
+        xml = '<html usage_id="%s">bar</html>' % usage_id
+        new_usage_id = rt.parse_xml_string(xml, id_generator)
         self.assertEqual(usage_id, new_usage_id)
         self.assertEqual('bar', rt.get_block(usage_id).content)
 
     def test_rendered_blocks_have_js_dependencies_included(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<slider_demo/>')
+        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         block = rt.get_block(usage_id)
         frag = rt.render(block, 'student_view')
@@ -181,7 +200,7 @@ class RuntimeTestCase(actions.TestBase):
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBLOCK_XSRF_TOKEN_NAME)
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>')
+        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         block = rt.get_block(usage_id)
         url = urlparse.urlparse(rt.handler_url(block, 'vote'))
@@ -193,7 +212,7 @@ class RuntimeTestCase(actions.TestBase):
 
     def test_runtime_prevents_student_writes_to_non_student_fields(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html_demo>Test</html_demo>')
+        usage_id = rt.parse_xml_string('<html>Test</html>', id_generator)
 
         # Load the block in student role
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
@@ -212,14 +231,29 @@ class RuntimeTestCase(actions.TestBase):
         block.content = 'Something else'
         block.save()  # No exception
 
+    def test_runtime_prevents_loading_of_non_whitelisted_blocks(self):
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
 
-class XBlockActionHandlerTestCase(actions.TestBase):
+        # Loading thumbs block succeeds when it is whitelisted
+        unused_usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+
+        # Loading thumbs block fails when it is not whitelisted
+        xblock_module.XBLOCK_WHITELIST.remove(THUMBS_ENTRY_POINT)
+        xblock.core.XBlock._plugin_cache = None  # pylint: disable=protected-access
+        try:
+            unused_usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+            self.fail('Expected ForbiddenXBlockError')
+        except xblock_module.ForbiddenXBlockError:
+            pass  # Expected exception
+
+
+class XBlockActionHandlerTestCase(TestBase):
     """Functional tests for the XBlock callback handler."""
 
     def test_post(self):
         actions.login('user@example.com')
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>')
+        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
         self.assertEqual(0, rt.get_block(usage_id).upvotes)
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBLOCK_XSRF_TOKEN_NAME)
@@ -238,7 +272,7 @@ class XBlockActionHandlerTestCase(actions.TestBase):
         """Callbacks with bad XSRF token should be rejected."""
         actions.login('user@example.com')
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>')
+        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
 
         params = {
             'usage': usage_id,
@@ -252,7 +286,7 @@ class XBlockActionHandlerTestCase(actions.TestBase):
 
     def test_post_without_user_rejected(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>')
+        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
 
         params = {
             'usage': usage_id,
@@ -265,7 +299,7 @@ class XBlockActionHandlerTestCase(actions.TestBase):
         self.assertEqual(403, response.status_int)
 
 
-class RootUsageTestCase(actions.TestBase):
+class RootUsageTestCase(TestBase):
     """Functional tests for the root usage DAO and DTO."""
 
     def test_root_usage_properties(self):
@@ -289,7 +323,7 @@ class RootUsageTestCase(actions.TestBase):
         self.assertIsNone(root_usage)
 
 
-class XBlockEditorTestCase(actions.TestBase):
+class XBlockEditorTestCase(TestBase):
     """Functional tests for the XBlock editor in the dashboard."""
 
     def setUp(self):
@@ -330,7 +364,7 @@ class XBlockEditorTestCase(actions.TestBase):
         # Add some content to the class. Import should not appear now.
         app_context = sites.get_all_courses()[0]
         course = courses.Course(None, app_context=app_context)
-        unit = course.add_unit()
+        unused_unit = course.add_unit()
         course.save()
 
         response = self.get('dashboard?action=assets')
@@ -359,7 +393,7 @@ class XBlockEditorTestCase(actions.TestBase):
         xblock_module.custom_module.enable()
 
 
-class XBlockEditorRESTHandlerTestCase(actions.TestBase):
+class XBlockEditorRESTHandlerTestCase(TestBase):
     """Functional tests for the dashboard XBlock editor's REST handler."""
 
     def setUp(self):
@@ -370,7 +404,7 @@ class XBlockEditorRESTHandlerTestCase(actions.TestBase):
 
     def get_request(
         self, xsrf_token, description='html block',
-        xml='<html_demo>test html</html_demo>'):
+        xml='<html>test html</html>'):
 
         request = {
             'key': '',
@@ -489,7 +523,7 @@ class XBlockEditorRESTHandlerTestCase(actions.TestBase):
         self.assertEqual(401, resp_dict['status'])
 
 
-class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
+class XBlockArchiveRESTHandlerTestCase(TestBase):
     """Functional tests for the XBlock archive importer REST handler."""
 
     def setUp(self):
@@ -506,9 +540,9 @@ class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
         namespace_manager.set_namespace(self.old_namespace)
         super(XBlockArchiveRESTHandlerTestCase, self).tearDown()
 
-    def get_request(self, xsrf_token=None, file=None, dry_run=False):
+    def get_request(self, xsrf_token=None, upload=None, dry_run=False):
         xsrf_token = xsrf_token or self.xsrf_token
-        filename = file.filename if file else ''
+        filename = upload.filename if upload else ''
         request = {
             'key': '',
             'payload': transforms.dumps({
@@ -517,29 +551,30 @@ class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
             'xsrf_token': xsrf_token}
         return {
             'request': transforms.dumps(request),
-            'file': file}
+            'file': upload}
 
     def test_post_fails_with_bad_xsrf_token(self):
-        response = self.post('rest/xblock_archive',
-            self.get_request(xsrf_token='bad_token'))
+        response = self.post(
+            'rest/xblock_archive', self.get_request(xsrf_token='bad_token'))
         resp_dict = transforms.loads(response.body)
         self.assertEqual(403, resp_dict['status'])
 
     def test_post_fails_without_login(self):
         actions.logout()
-        response = self.post('rest/xblock_archive', self.get_request(),
-            expect_errors=True)
+        response = self.post(
+            'rest/xblock_archive', self.get_request(), expect_errors=True)
         self.assertEqual(404, response.status_int)
 
     def test_post_fails_with_missing_attachment(self):
-        response = self.post('rest/xblock_archive', self.get_request(file=None))
+        response = self.post('rest/xblock_archive', self.get_request())
         resp_dict = transforms.loads(response.body)
         self.assertEqual(403, resp_dict['status'])
         self.assertEqual('No file specified.', resp_dict['message'])
 
     def test_post_fails_with_malformed_tar_gz_file(self):
-        response = self.post('rest/xblock_archive',
-            self.get_request(file=webtest.Upload('filename.tar.gz', 'abc')))
+        response = self.post(
+            'rest/xblock_archive',
+            self.get_request(upload=webtest.Upload('filename.tar.gz', 'abc')))
         resp_dict = transforms.loads(response.body)
         self.assertEqual(412, resp_dict['status'])
         self.assertIn('Unable to read the archive file', resp_dict['message'])
@@ -548,7 +583,7 @@ class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
         rt = xblock_module.Runtime(MockHandler())
 
         def get_root_usage(body):
-            match = re.compile('<xblock root_id="(\d+)"></xblock>').match(body)
+            match = re.compile(r'<xblock root_id="(\d+)"></xblock>').match(body)
             self.assertIsNotNone(match)
             root_usage_id = match.group(1)
             return xblock_module.RootUsageDao.load(root_usage_id)
@@ -556,8 +591,9 @@ class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
         # Upload a vaid course archive
         archive = os.path.join(
             os.path.dirname(__file__), 'resources', 'functional_tests.tar.gz')
-        response = self.post('rest/xblock_archive',
-             self.get_request(file=webtest.Upload(archive)))
+        response = self.post(
+            'rest/xblock_archive',
+            self.get_request(upload=webtest.Upload(archive)))
         resp_dict = transforms.loads(response.body)
         self.assertEqual(200, resp_dict['status'])
         self.assertIn('Saved.', resp_dict['message'])
@@ -643,13 +679,12 @@ class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
         self.assertEqual(5861, len(image))
 
     def test_dry_run_with_good_course_archive(self):
-        rt = xblock_module.Runtime(MockHandler())
-
         # Upload a vaid course archive
         archive = os.path.join(
             os.path.dirname(__file__), 'resources', 'functional_tests.tar.gz')
-        response = self.post('rest/xblock_archive',
-             self.get_request(file=webtest.Upload(archive), dry_run=True))
+        response = self.post(
+            'rest/xblock_archive',
+            self.get_request(upload=webtest.Upload(archive), dry_run=True))
         resp_dict = transforms.loads(response.body)
 
         # Confirm response code 412 to block page redirect and success message
@@ -670,7 +705,7 @@ class XBlockArchiveRESTHandlerTestCase(actions.TestBase):
         self.assertEqual(0, len(fs.list(fs.physical_to_logical(''))))
 
 
-class ImporterTestCase(actions.TestBase):
+class ImporterTestCase(TestBase):
     """Functional tests for the XBlock archive importer."""
 
     # The happy case is exercised end-to-end by
@@ -712,7 +747,7 @@ class ImporterTestCase(actions.TestBase):
         def physical_to_logical(self, path):
             return path
 
-        def isfile(self, path):
+        def isfile(self, unused_path):
             return False
 
     def setUp(self):
@@ -787,7 +822,7 @@ class ImporterTestCase(actions.TestBase):
             self.assertIn('Cannot upload files bigger than', expected.message)
 
 
-class XBlockTagTestCase(actions.TestBase):
+class XBlockTagTestCase(TestBase):
     """Functional tests for the XBlock tag."""
 
     class Mockhandler(object):
@@ -849,7 +884,7 @@ class XBlockTagTestCase(actions.TestBase):
         self.assertEqual(1, len(head.findall('.//link[@href="C.css"]')))
 
 
-class XBlockResourceHandlerTestCase(actions.TestBase):
+class XBlockResourceHandlerTestCase(TestBase):
     """Functional tests for the handler for XBlock resources."""
 
     def test_serves_xblock_workbench_resources(self):
@@ -858,12 +893,12 @@ class XBlockResourceHandlerTestCase(actions.TestBase):
         self.assertEqual(200, response.status_int)
 
 
-class XBlockLocalResourceHandlerTestCase(actions.TestBase):
+class XBlockLocalResourceHandlerTestCase(TestBase):
     """Functional tests for the handler for XBlock local resources."""
 
     def test_serves_xblock_local_resources(self):
         response = self.get(
-            'modules/xblock_module/xblock_local_resources/equality_demo/public/'
-            'images/correct-icon.png')
+            'modules/xblock_module/xblock_local_resources/sequential/public/'
+            'images/sequence/film.png')
         self.assertEqual(200, response.status_int)
         self.assertEqual('image/png', response.headers['Content-Type'])

@@ -1,3 +1,6 @@
 *.pyc
 examples/*
+*.egg-info
 !examples/README.rst
+.project
+.pydevproject

@@ -26,12 +26,11 @@ GCB_GIT_REV=470496ff0416
 GCB_ZIP=https://course-builder.googlecode.com/files/coursebuilder_20130814_214936.zip
 
 XBLOCK_GIT_URL=https://github.com/edx/XBlock.git
-XBLOCK_REPO_NAME=XBlock
-XBLOCK_GIT_REV=ad196d339ba484a70e797edca2686a36dbd634d9
+XBLOCK_GIT_REV=40a949eb934ddb7ec71cd6b935772500aec8bf1c
 
 GAE_XBLOCK_LIB_GIT_URL=https://github.com/google/appengine_xblock_runtime.git
 GAE_XBLOCK_LIB_REPO_NAME=appengine_xblock_runtime
-GAE_XBLOCK_LIB_GIT_REV=0159cf946f43f36daf2196276eceeb7c7cb4fa21
+GAE_XBLOCK_LIB_GIT_REV=b599ce1981f9655bae8a151ab9ab1931e5ae5ea3
 
 GAE_URL=http://googleappengine.googlecode.com/files/google_appengine_1.8.2.zip
 
@@ -67,14 +66,25 @@ checkout_course_builder() {
 }
 
 checkout_xblock() {
-  cd examples/coursebuilder/lib
-  git clone $XBLOCK_GIT_URL $XBLOCK_REPO_NAME
-  cd $XBLOCK_REPO_NAME
+  cd examples
+  
+  git clone $XBLOCK_GIT_URL XBlock
+  cd XBlock
   git checkout $XBLOCK_GIT_REV
   python setup.py egg_info
   cd thumbs
   python setup.py egg_info
-  cd ../../../../..
+  cd ../..
+
+  # Take only the parts of XBlock which are needed
+  mkdir coursebuilder/lib/XBlock
+  mv XBlock/XBlock.egg-info coursebuilder/lib/XBlock
+  mv XBlock/xblock coursebuilder/lib/XBlock
+  mv XBlock/thumbs coursebuilder/lib/XBlock
+  mv XBlock/workbench coursebuilder/lib/XBlock
+  rm -rf XBlock
+
+  cd ..
 }
 
 checkout_gae_xblock_lib() {

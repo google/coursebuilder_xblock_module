@@ -23,6 +23,7 @@ from xml.etree import cElementTree
 from controllers import utils
 import extensions.tags.gcb
 import jinja2
+from lxml import etree
 from modules.assessment_tags import questions
 from xblock.core import XBlock
 from xblock.fields import Integer
@@ -52,7 +53,11 @@ class NavItem(object):
 
 
 class SequenceBlock(XBlock):
-    """An XBlock which presents its children in a tabbed view."""
+    """An XBlock which presents its children in a tabbed view.
+
+    See xmodule.seq_module.SequenceModule in
+    https://github.com/edx/edx-platform.
+    """
 
     has_children = True
 
@@ -94,10 +99,79 @@ class SequenceBlock(XBlock):
     @XBlock.json_handler
     def on_select(self, data, suffix=''):
         self.position = data.get('position', 0)
+        return {'position': self.position}
+
+
+class VerticalBlock(XBlock):
+    """An XBlock which presents its children in a vertical list.
+
+    See xmodule.vertical_module.VerticalModule in
+    https://github.com/edx/edx-platform.
+    """
+
+    has_children = True
+
+    def __init__(self, *args, **kwargs):
+        super(VerticalBlock, self).__init__(*args, **kwargs)
+        self.template_env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(
+                os.path.join(os.path.dirname(__file__), 'templates')),
+            extensions=['jinja2.ext.autoescape'],
+            autoescape=True)
+
+    def student_view(self, context=None):
+        template = self.template_env.get_template('vertical.html')
+        child_frags = self.runtime.render_children(self, context=context)
+        result = Fragment()
+        result.add_frags_resources(child_frags)
+        result.add_content(template.render(
+            {'children': [frag.body_html() for frag in child_frags]}))
+        return result
+
+
+class HtmlBlock(XBlock):
+    """An XBlock which presents a single block of HTML.
+
+    See xmodule.html_module.HtmlModule in
+    https://github.com/edx/edx-platform.
+    """
+
+    content = String(
+        display_name='HTML Text',
+        help='A block of HTML text',
+        default='HTML text',
+        scope=Scope.content)
+
+    def student_view(self, context=None):
+        frag = Fragment()
+        frag.add_content(self.content)
+        return frag
+
+    @classmethod
+    def parse_xml(cls, node, runtime, keys, id_generator):
+        block = runtime.construct_xblock_from_class(cls, keys)
+
+        block.content = unicode(node.text or u'')
+        for child in node:
+            block.content += etree.tostring(child, encoding='unicode')
+
+        return block
+
+    def export_xml(self, node):
+        rooted_html = etree.fromstring('<div>' + self.content + '</div>')
+
+        node.tag = self.xml_element_name()
+        node.text = rooted_html.text
+        for elt in rooted_html:
+            node.append(elt)
 
 
 class VideoBlock(XBlock, extensions.tags.gcb.YouTube):
-    """A XBlock to display YouTube videos."""
+    """An XBlock to display YouTube videos.
+
+    See xmodule.videp_module.VideoModule in
+    https://github.com/edx/edx-platform.
+    """
 
     display_name = String(
         display_name='A YouTube Video',

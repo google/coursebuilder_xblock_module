@@ -56,6 +56,7 @@ import xblock.core
 import xblock.field_data
 import xblock.fields
 import xblock.fragment
+import xblock.plugin
 import xblock.runtime
 
 import dbmodels
@@ -79,6 +80,16 @@ WORKBENCH_STATIC_PATH = os.path.normpath('lib/XBlock/workbench/static')
 XBLOCK_TEMPLATES_PATH = 'lib/XBlock/xblock/templates'
 # XSRF protection token for handler callbacks
 XBLOCK_XSRF_TOKEN_NAME = 'xblock_handler'
+
+XBLOCK_WHITELIST = [
+    'sequential = cb_xblocks_core.cb_xblocks_core:SequenceBlock',
+    'video = cb_xblocks_core.cb_xblocks_core:VideoBlock',
+    'cbquestion = cb_xblocks_core.cb_xblocks_core:QuestionBlock',
+    'html = cb_xblocks_core.cb_xblocks_core:HtmlBlock',
+    'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock'
+]
+
+id_generator = appengine_xblock_runtime.runtime.IdGenerator()
 
 # XBlock runtime section
 
@@ -108,6 +119,19 @@ class StudentFieldData(xblock.field_data.SplitFieldData):
             xblock.fields.Scope.preferences: student_data})
 
 
+class ForbiddenXBlockError(Exception):
+    """Raised when a non-whitelisted XBlock is requested."""
+
+
+def select_xblock(identifier, entry_points):
+    """Hook called when loading XBlock classes, which enforces whitelist."""
+    entry_point = xblock.plugin.default_select(identifier, entry_points)
+    if str(entry_point) not in XBLOCK_WHITELIST:
+        raise ForbiddenXBlockError(
+            'Attempted to load forbidden XBlock: %s' % str(entry_point))
+    return entry_point
+
+
 class Runtime(appengine_xblock_runtime.runtime.Runtime):
     """A XBlock runtime which uses the App Engine datastore."""
 
@@ -124,7 +148,7 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             field_data = xblock.field_data.ReadOnlyFieldData(db_data)
 
         super(Runtime, self).__init__(
-            field_data=field_data, student_id=student_id)
+            field_data=field_data, student_id=student_id, select=select_xblock)
         self.handler = handler
 
     def render_template(self, template_name, **kwargs):
@@ -187,27 +211,27 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
         wrapped.add_frag_resources(frag)
         return wrapped
 
-    def _usage_id_from_node(self, node, parent_id):
+    def _usage_id_from_node(self, node, parent_id, _id_generator):
         """Override import method from XBlock runtime."""
         block_type = node.tag
         usage_id = node.get('usage_id')
         if usage_id:
-            def_id = self.usage_store.get_definition_id(usage_id)
+            def_id = self.id_reader.get_definition_id(usage_id)
         else:
-            def_id = self.usage_store.create_definition(block_type)
-            usage_id = self.usage_store.create_usage(def_id)
+            def_id = _id_generator.create_definition(block_type)
+            usage_id = _id_generator.create_usage(def_id)
         keys = xblock.fields.ScopeIds(
             xblock.fields.UserScope.NONE, block_type, def_id, usage_id)
-        block_class = self.mixologist.mix(
-            xblock.core.XBlock.load_class(block_type))
-        block = block_class.parse_xml(node, self, keys)
+        block_class = self.mixologist.mix(self.load_block_type(block_type))
+        block = block_class.parse_xml(node, self, keys, _id_generator)
         block.parent = parent_id
         block.save()
         return usage_id
 
-    def add_node_as_child(self, block, node):
+    def add_node_as_child(self, block, node, _id_generator):
         """Override import method from XBlock runtime."""
-        usage_id = self._usage_id_from_node(node, block.scope_ids.usage_id)
+        usage_id = self._usage_id_from_node(
+            node, block.scope_ids.usage_id, _id_generator)
         if usage_id not in block.children:
             block.children.append(usage_id)
 
@@ -545,7 +569,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
         try:
             rt = Runtime(self, is_admin=True)
             usage_id = rt.parse_xml_string(
-                unicode(payload['xml']).encode('utf_8'))
+                unicode(payload['xml']).encode('utf_8'), id_generator)
         except Exception as e:  # pylint: disable=broad-except
             transforms.send_json_response(self, 412, str(e))
             return
@@ -789,7 +813,7 @@ class Importer(object):
         lesson.title = sequential.attrib['display_name']
 
         # create the xblock asset
-        usage_id = self.rt.parse_xml_string(_get_xml(sequential))
+        usage_id = self.rt.parse_xml_string(_get_xml(sequential), id_generator)
         description = 'Unit %s, Lesson %s: %s' % (
             unit.index, lesson.index, lesson.title)
         root_usage = RootUsageDto(
