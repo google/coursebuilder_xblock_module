@@ -25,16 +25,19 @@ from xml.etree import cElementTree
 
 from controllers import sites
 from controllers import utils
+import html5lib
 from models import courses
 from models import transforms
 from modules.dashboard import filer
+from modules.xblock_module import dbmodels
 from modules.xblock_module import xblock_module
-from tests.functional import actions
-from tests.functional import test_classes
 from tools.etl import etl
 import webtest
 import xblock
 from xblock import fragment
+
+from tests.functional import actions
+from tests.functional import test_classes
 
 from google.appengine.api import namespace_manager
 
@@ -49,12 +52,19 @@ def insert_thumbs_block():
     return xblock_module.RootUsageDao.save(root_usage)
 
 
+def parse_html_string(html_doc):
+    parser = html5lib.HTMLParser(
+        tree=html5lib.treebuilders.getTreeBuilder('etree', cElementTree),
+        namespaceHTMLElements=False)
+    return parser.parse(html_doc)
+
+
 class MockHandler(object):
     def canonicalize_url(self, location):
         return '/new_course' + location
 
 
-id_generator = xblock_module.id_generator
+id_generator = xblock_module.IdGenerator()
 
 
 class TestBase(actions.TestBase):
@@ -88,7 +98,6 @@ class DataMigrationTests(TestBase):
         sites.setup_courses('course:/a::ns_a, course:/b::ns_b, course:/:/')
 
         app_context_a, app_context_b, _ = sites.get_all_courses()
-        course_a = courses.Course(None, app_context=app_context_a)
         course_b = courses.Course(None, app_context=app_context_b)
 
         # Switch to Course A and insert a CB XBlock usage
@@ -122,10 +131,6 @@ class DataMigrationTests(TestBase):
 
         sites.setup_courses('course:/a::ns_a, course:/b::ns_b, course:/:/')
 
-        app_context_a, app_context_b, _ = sites.get_all_courses()
-        course_a = courses.Course(None, app_context=app_context_a)
-        course_b = courses.Course(None, app_context=app_context_b)
-
         # Switch to Course A and insert a CB XBlock usage
         namespace_manager.set_namespace('ns_a')
 
@@ -142,7 +147,7 @@ class DataMigrationTests(TestBase):
         # Download course data from Course A with ETL
         archive_path = os.path.join(self.test_tempdir, 'archive.zip')
         args = etl.PARSER.parse_args([
-            etl._MODE_DOWNLOAD, etl._TYPE_COURSE, #  pylint: disable=protected-access
+            etl._MODE_DOWNLOAD, etl._TYPE_COURSE, # pylint: disable=protected-access
             '--archive_path', archive_path, '/a', 'mycourse', 'localhost:8080'])
         etl.main(args, environment_class=test_classes.FakeEnvironment)
 
@@ -175,7 +180,7 @@ class RuntimeTestCase(TestBase):
         rt.export_to_xml(block, xml_buffer)
         self.assertIn(xml, xml_buffer.getvalue())
 
-    def test_runtime_imports_blocks_with_ids(self):
+    def test_runtime_updates_blocks_with_ids(self):
         """The workbench should update blocks in place when they have ids."""
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
         usage_id = rt.parse_xml_string('<html>foo</html>', id_generator)
@@ -185,6 +190,43 @@ class RuntimeTestCase(TestBase):
         new_usage_id = rt.parse_xml_string(xml, id_generator)
         self.assertEqual(usage_id, new_usage_id)
         self.assertEqual('bar', rt.get_block(usage_id).content)
+
+    def test_runtime_removes_orphaned_blocks_on_update(self):
+        """Remove a child on block update and see it removed in datastore."""
+        block_with_child_xml = """
+<vertical usage_id="vertical_id">
+  <html usage_id="html_id">text</html>
+</vertical>"""
+        block_without_child_xml = """
+<vertical usage_id="vertical_id">
+</vertical>"""
+
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
+        rt.parse_xml_string(block_with_child_xml, id_generator)
+        vertical = rt.get_block('vertical_id')
+        self.assertEqual(1, len(vertical.children))
+
+        # Merge in same vertical, with html blocm deleted and check it is
+        # deleted from the block tree
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
+        rt.parse_xml_string(block_without_child_xml, id_generator)
+        vertical = rt.get_block('vertical_id')
+        self.assertEqual(0, len(vertical.children))
+
+        # However the html block is not deleted from the datastore, just
+        # unlinked from the content tree.
+        html = rt.get_block('html_id')
+        self.assertEqual('html', html.xml_element_name())
+        self.assertEqual('text', html.content)
+
+    def test_runtime_should_import_blocks_with_specified_ids(self):
+        """The workbench shouild create a new block with a given id."""
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
+        usage_id = rt.parse_xml_string(
+            '<html usage_id="my_usage_id">foo</html>', id_generator)
+        block = rt.get_block('my_usage_id')
+        self.assertEqual('html', block.xml_element_name())
+        self.assertEqual('foo', block.content)
 
     def test_rendered_blocks_have_js_dependencies_included(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
@@ -357,9 +399,14 @@ class XBlockEditorTestCase(TestBase):
 
     def test_import_xblock_button(self):
         """Import button present if class empty, absent if it has content."""
-        response = self.get('dashboard?action=assets')
-        self.assertIn(
-            'href="dashboard?action=import_xblock">Import</a>', response.body)
+
+        def get_import_button():
+            root = parse_html_string(self.get('dashboard?action=assets').body)
+            return root.find('.//*[@id="gcb-main-content"]/a[1]')
+
+        button = get_import_button()
+        self.assertEquals('Import', button.text)
+        self.assertEquals('dashboard?action=import_xblock', button.attrib['href'])
 
         # Add some content to the class. Import should not appear now.
         app_context = sites.get_all_courses()[0]
@@ -367,9 +414,9 @@ class XBlockEditorTestCase(TestBase):
         unused_unit = course.add_unit()
         course.save()
 
-        response = self.get('dashboard?action=assets')
-        self.assertNotIn(
-            'href="dashboard?action=import_xblock">Import</a>', response.body)
+        button = get_import_button()
+        self.assertEquals('Merge', button.text)
+        self.assertEquals('dashboard?action=import_xblock', button.attrib['href'])
 
     def test_edit_xblock_editor_present(self):
         root_usage_id = insert_thumbs_block()
@@ -402,8 +449,9 @@ class XBlockEditorRESTHandlerTestCase(TestBase):
         self.xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBlockEditorRESTHandler.XSRF_TOKEN)
 
+    @classmethod
     def get_request(
-        self, xsrf_token, description='html block',
+        cls, xsrf_token, description='html block',
         xml='<html>test html</html>'):
 
         request = {
@@ -579,24 +627,38 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         self.assertEqual(412, resp_dict['status'])
         self.assertIn('Unable to read the archive file', resp_dict['message'])
 
-    def test_good_course_archive(self):
-        rt = xblock_module.Runtime(MockHandler())
-
-        def get_root_usage(body):
-            match = re.compile(r'<xblock root_id="(\d+)"></xblock>').match(body)
-            self.assertIsNotNone(match)
-            root_usage_id = match.group(1)
-            return xblock_module.RootUsageDao.load(root_usage_id)
-
-        # Upload a vaid course archive
+    def _import_archive(self, archive_name=None):
+        archive_name = archive_name or 'functional_tests.tar.gz'
         archive = os.path.join(
-            os.path.dirname(__file__), 'resources', 'functional_tests.tar.gz')
+            os.path.dirname(__file__), 'resources', archive_name)
         response = self.post(
             'rest/xblock_archive',
             self.get_request(upload=webtest.Upload(archive)))
         resp_dict = transforms.loads(response.body)
         self.assertEqual(200, resp_dict['status'])
         self.assertIn('Saved.', resp_dict['message'])
+        return resp_dict
+
+    def _import_dry_run_archive(self, archive_name=None):
+        archive_name = archive_name or 'functional_tests.tar.gz'
+        archive = os.path.join(
+            os.path.dirname(__file__), 'resources', archive_name)
+        response = self.post(
+            'rest/xblock_archive',
+            self.get_request(upload=webtest.Upload(archive), dry_run=True))
+        resp_dict = transforms.loads(response.body)
+        self.assertEqual(412, resp_dict['status'])
+        self.assertIn('Upload successfully validated', resp_dict['message'])
+        return resp_dict
+
+    def _get_root_usage(self, body):
+        match = re.compile(r'<xblock root_id="(\d+)"></xblock>').match(body)
+        self.assertIsNotNone(match)
+        root_usage_id = match.group(1)
+        return xblock_module.RootUsageDao.load(root_usage_id)
+
+    def _confirm_base_course_structure(self):
+        rt = xblock_module.Runtime(MockHandler())
 
         # Confirm that the course has been imported correctly
         app_context = sites.get_all_courses()[0]
@@ -608,6 +670,12 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         unit1, unit2 = units
         self.assertEqual('Section 1', unit1.title)
         self.assertEqual('Section 2', unit2.title)
+        self.assertEqual(
+            '688fe994cb234bf48eb96c84aea018b5',
+            unit1.properties['xblock.usage_id'])
+        self.assertEqual(
+            '094732b6779740029b88d8db4efce83b',
+            unit2.properties['xblock.usage_id'])
 
         # The first unit has two lessons, the second unit no lessons
         unit1_lessons = course.get_lessons(unit1.unit_id)
@@ -620,7 +688,7 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         lesson = unit1_lessons[0]
 
         self.assertEqual('Subsection 1.1', lesson.title)
-        root_usage = get_root_usage(lesson.objectives)
+        root_usage = self._get_root_usage(lesson.objectives)
         self.assertEqual(
             'Unit 1, Lesson 1: Subsection 1.1', root_usage.description)
 
@@ -628,6 +696,10 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         block = rt.get_block(root_usage.usage_id)
         self.assertEqual('sequential', block.xml_element_name())
         self.assertEqual(2, len(block.children))
+
+        # The usage ID is set from the archive file
+        self.assertEqual(
+            '974d5439622e4012bd28998efa15e02d', block.scope_ids.usage_id)
 
         # The first vertical has a single HTML block with some text
         child = rt.get_block(block.children[0])
@@ -645,7 +717,7 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         grandchild = rt.get_block(child.children[0])
         self.assertEqual('html', grandchild.xml_element_name())
         self.assertIn(
-            '<img src="assets/img/static/test.png"/>', grandchild.content)
+            '<img src="assets/img/static/test.png">', grandchild.content)
         # Second, a YouTube video
         grandchild = rt.get_block(child.children[1])
         self.assertEqual('video', grandchild.xml_element_name())
@@ -654,7 +726,7 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         # Tests for Unit 1, Lesson 2:
 
         lesson = unit1_lessons[1]
-        root_usage = get_root_usage(lesson.objectives)
+        root_usage = self._get_root_usage(lesson.objectives)
         self.assertEqual(
             'Unit 1, Lesson 2: Subsection 1.2', root_usage.description)
 
@@ -678,14 +750,144 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         image = fs.get(path).read()
         self.assertEqual(5861, len(image))
 
+    def test_good_course_archive(self):
+        # Upload a vaid course archive
+        self._import_archive()
+        self._confirm_base_course_structure()
+
+    def test_import_then_merge(self):
+        rt = xblock_module.Runtime(MockHandler())
+
+        # Import the course then merge in some changes
+        self._import_archive(archive_name='functional_tests.tar.gz')
+        self._confirm_base_course_structure()
+        self._import_archive(archive_name='functional_tests_merge.tar.gz')
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        units = course.get_units()
+
+        # Confirm the unit structure; Unit 1 has changed names
+        self.assertEqual(2, len(units))
+        unit1, unit2 = units
+        self.assertEqual('Section One', unit1.title) # changed
+        self.assertEqual('Section 2', unit2.title)
+        self.assertEqual(
+            '688fe994cb234bf48eb96c84aea018b5',
+            unit1.properties['xblock.usage_id'])
+        self.assertEqual(
+            '094732b6779740029b88d8db4efce83b',
+            unit2.properties['xblock.usage_id'])
+
+        # Both units now have one lesson each
+        unit1_lessons = course.get_lessons(unit1.unit_id)
+        self.assertEqual(1, len(unit1_lessons))
+        unit2_lessons = course.get_lessons(unit2.unit_id)
+        self.assertEqual(1, len(unit2_lessons))
+
+        # Tests for Unit 1, Lesson 1:
+
+        lesson = unit1_lessons[0]
+
+        self.assertEqual('Subsection One point one', lesson.title) # changed
+        root_usage = self._get_root_usage(lesson.objectives)
+        self.assertEqual(
+            'Unit 1, Lesson 1: Subsection One point one', # changed
+            root_usage.description)
+
+        # The lesson has a sequence of two verticals
+        block = rt.get_block(root_usage.usage_id)
+        self.assertEqual('sequential', block.xml_element_name())
+        self.assertEqual(2, len(block.children))
+
+        # The usage ID is unchanged
+        self.assertEqual(
+            '974d5439622e4012bd28998efa15e02d', block.scope_ids.usage_id)
+
+        # The first vertical has a single HTML block with some text
+        child = rt.get_block(block.children[0])
+        self.assertEqual('vertical', child.xml_element_name())
+        self.assertEqual(1, len(child.children))
+        grandchild = rt.get_block(child.children[0])
+        self.assertEqual('html', grandchild.xml_element_name())
+        self.assertIn('Some modified text', grandchild.content) # changed
+
+        # The second vertical has two components
+        child = rt.get_block(block.children[1])
+        self.assertEqual('vertical', child.xml_element_name())
+        self.assertEqual(2, len(child.children))
+        # First, an HTML block with an image
+        grandchild = rt.get_block(child.children[0])
+        self.assertEqual('html', grandchild.xml_element_name())
+        self.assertIn(
+            '<img src="assets/img/static/test.png">', grandchild.content)
+        # Second, a YouTube video
+        grandchild = rt.get_block(child.children[1])
+        self.assertEqual('video', grandchild.xml_element_name())
+        self.assertIn('Kdg2drcUjYI', grandchild.youtube_id_1_0)
+
+        # Tests for Unit 2, Lesson 1 (which is all new)
+
+        lesson = unit2_lessons[0]
+
+        self.assertEqual('Subsection 2.1', lesson.title) # changed
+        root_usage = self._get_root_usage(lesson.objectives)
+        self.assertEqual(
+            'Unit 2, Lesson 1: Subsection 2.1', root_usage.description)
+
+        # The lesson has a sequential with one vertical
+        block = rt.get_block(root_usage.usage_id)
+        self.assertEqual('sequential', block.xml_element_name())
+        self.assertEqual(1, len(block.children))
+
+        # The vertical has a single HTML block with some text
+        child = rt.get_block(block.children[0])
+        self.assertEqual('vertical', child.xml_element_name())
+        self.assertEqual(1, len(child.children))
+        grandchild = rt.get_block(child.children[0])
+        self.assertEqual('html', grandchild.xml_element_name())
+        self.assertIn('Text for Subsection 2.1', grandchild.content)
+
+    def test_import_then_merge_journaling(self):
+        self._import_archive(archive_name='functional_tests.tar.gz')
+        resp_dict = self._import_dry_run_archive(
+            archive_name='functional_tests_merge.tar.gz')
+        expected_message = """Upload successfully validated:
+Update unit title from 'Section 1' to 'Section One'
+Update lesson title from 'Subsection 1.1' to 'Subsection One point one'
+XBlock content updated in 'Subsection One point one' (974d5439622e4012bd28998efa15e02d)
+Delete lesson 'Subsection 1.2'
+Update unit title from 'Section 2' to 'Section 2'
+Create lesson 'Subsection 2.1'
+XBlock content inserted in 'Subsection 2.1' (4d005fc5b85f436cb029d8b0942b4662)
+Updating file '/assets/img/static/test.png'"""
+        self.assertEqual(expected_message, resp_dict['message'])
+
+    def test_merge_does_not_affect_non_imported_xblocks(self):
+        # Insert XBlock content menually
+        xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
+            xblock_module.XBlockEditorRESTHandler.XSRF_TOKEN)
+        response = self.put(
+            'rest/xblock', XBlockEditorRESTHandlerTestCase.get_request(xsrf_token))
+        resp_dict = transforms.loads(response.body)
+        self.assertEqual(200, resp_dict['status'])
+        payload = transforms.loads(resp_dict['payload'])
+        root_usage_id = payload['key']
+
+        # Now import an archive and merge in another
+        self._import_archive(archive_name='functional_tests.tar.gz')
+        self._import_archive(archive_name='functional_tests_merge.tar.gz')
+
+        # Confirm that the original XBlock content is unchanged
+        root_usage = xblock_module.RootUsageDao.load(root_usage_id)
+        block = xblock_module.Runtime(
+            MockHandler()).get_block(root_usage.usage_id)
+        self.assertEqual('html', block.xml_element_name())
+        self.assertEqual('test html', block.content)
+
     def test_dry_run_with_good_course_archive(self):
         # Upload a vaid course archive
-        archive = os.path.join(
-            os.path.dirname(__file__), 'resources', 'functional_tests.tar.gz')
-        response = self.post(
-            'rest/xblock_archive',
-            self.get_request(upload=webtest.Upload(archive), dry_run=True))
-        resp_dict = transforms.loads(response.body)
+        resp_dict = self._import_dry_run_archive()
 
         # Confirm response code 412 to block page redirect and success message
         self.assertEqual(412, resp_dict['status'])
@@ -699,10 +901,115 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
 
         # Confirm no XBlock content installed
         self.assertEqual(0, len(xblock_module.RootUsageDao.get_all()))
+        self.assertEqual(0, len(dbmodels.DefinitionEntity.all().fetch(1000)))
+        self.assertEqual(0, len(dbmodels.UsageEntity.all().fetch(1000)))
+        self.assertEqual(0, len(dbmodels.KeyValueEntity.all().fetch(1000)))
 
         # Confirm no files were installed
         fs = app_context.fs.impl
         self.assertEqual(0, len(fs.list(fs.physical_to_logical(''))))
+
+    def test_import_appends_new_units(self):
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.add_unit()
+        unit.title = 'test'
+        course.save()
+        assert 1 == len(course.get_units())
+
+        self._import_archive()
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        assert 3 == len(course.get_units())
+        assert course.get_units()[0].title == 'test'
+        assert not course.get_units()[0].properties
+
+    def test_import_updates_existing_units(self):
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.add_unit()
+        unit.title = 'test'
+        unit.properties['xblock.usage_id'] = '688fe994cb234bf48eb96c84aea018b5'
+        course.save()
+
+        self._import_archive()
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        assert 2 == len(course.get_units())
+        assert course.get_units()[0].title == 'Section 1'
+
+    def test_import_removes_orphan_units(self):
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.add_unit()
+        unit.title = 'test'
+        unit.properties['xblock.usage_id'] = 'non_existent_usage_id'
+        course.save()
+        assert 1 == len(course.get_units())
+
+        self._import_archive()
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        assert 2 == len(course.get_units())
+        self.assertEqual(
+            '688fe994cb234bf48eb96c84aea018b5',
+            course.get_units()[0].properties['xblock.usage_id'])
+        self.assertEqual(
+            '094732b6779740029b88d8db4efce83b',
+            course.get_units()[1].properties['xblock.usage_id'])
+
+    def _make_lesson_for_existing_unit(self):
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.add_unit()
+        unit.properties['xblock.usage_id'] = '688fe994cb234bf48eb96c84aea018b5'
+        lesson = course.add_lesson(unit)
+        return course, lesson
+
+    def test_import_appends_new_lessons(self):
+        course, lesson = self._make_lesson_for_existing_unit()
+        lesson.title = 'test'
+        course.save()
+
+        self._import_archive()
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.get_units()[0]
+        assert 3 == len(course.get_lessons(unit.unit_id))
+        assert 'test' == course.get_lessons(unit.unit_id)[0].title
+        assert 'Subsection 1.1' == course.get_lessons(unit.unit_id)[1].title
+
+    def test_import_updates_existing_lessons(self):
+        course, lesson = self._make_lesson_for_existing_unit()
+        lesson.title = 'test'
+        lesson.properties[
+            'xblock.usage_id'] = '974d5439622e4012bd28998efa15e02d'
+        course.save()
+
+        self._import_archive()
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.get_units()[0]
+        assert 2 == len(course.get_lessons(unit.unit_id))
+        assert 'Subsection 1.1' == course.get_lessons(unit.unit_id)[0].title
+
+    def test_import_removes_orphan_lessons(self):
+        course, lesson = self._make_lesson_for_existing_unit()
+        lesson.title = 'test'
+        lesson.properties['xblock.usage_id'] = 'non_existent_usage_id'
+        course.save()
+
+        self._import_archive()
+
+        app_context = sites.get_all_courses()[0]
+        course = courses.Course(None, app_context=app_context)
+        unit = course.get_units()[0]
+        assert 2 == len(course.get_lessons(unit.unit_id))
 
 
 class ImporterTestCase(TestBase):
@@ -741,14 +1048,22 @@ class ImporterTestCase(TestBase):
                 return StringIO(self.course_xml)
 
     class MockCourse(object):
-        pass
+
+        def get_units(self):
+            return []
 
     class MockFileSystem(object):
+        def __init__(self):
+            self.last_put = None
+
         def physical_to_logical(self, path):
             return path
 
         def isfile(self, unused_path):
             return False
+
+        def put(self, path, unused_data):
+            self.last_put = path
 
     def setUp(self):
         super(ImporterTestCase, self).setUp()
@@ -793,21 +1108,19 @@ class ImporterTestCase(TestBase):
         self.assertEqual(1, len(errors))
         self.assertIn('Chapters may only contain sequentials', errors[0])
 
-    def test_refuse_to_install_duplicate_files(self):
+    def test_overwrite_duplicate_files(self):
         self.archive.members.append(
             self.MockArchive.MockMember('root/static/test.png'))
 
         def isfile(path):
             return path == '/assets/img/static/test.png'
         self.fs.isfile = isfile
+        self.assertIsNone(self.fs.last_put)
 
         self.importer = self._new_importer()
         self.importer.parse()
-        try:
-            self.importer.do_import()
-            self.fail('Expected BadImportException')
-        except xblock_module.BadImportException as expected:
-            self.assertIn('File already exists', expected.message)
+        self.importer.do_import()
+        self.assertEquals('/assets/img/static/test.png', self.fs.last_put)
 
     def test_refuse_to_install_too_large_files(self):
         self.archive.members.append(self.MockArchive.MockMember(
@@ -819,7 +1132,7 @@ class ImporterTestCase(TestBase):
             self.importer.do_import()
             self.fail('Expected BadImportException')
         except xblock_module.BadImportException as expected:
-            self.assertIn('Cannot upload files bigger than', expected.message)
+            self.assertIn('Cannot upload files bigger than', str(expected))
 
 
 class XBlockTagTestCase(TestBase):

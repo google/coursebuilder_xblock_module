@@ -22,7 +22,7 @@ set -e
 
 GCB_GIT_URL=https://code.google.com/p/course-builder/
 GCB_REPO_NAME=course-builder
-GCB_GIT_REV=470496ff0416
+GCB_GIT_REV=7207a44095c6
 GCB_ZIP=https://course-builder.googlecode.com/files/coursebuilder_20130814_214936.zip
 
 XBLOCK_GIT_URL=https://github.com/edx/XBlock.git

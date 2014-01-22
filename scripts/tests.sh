@@ -33,12 +33,12 @@ PYTHONPATH=$GAE_HOME/lib/webob-1.2.3:$PYTHONPATH
 PYTHONPATH=$GAE_HOME/lib/webapp2-2.5.2:$PYTHONPATH
 PYTHONPATH=$GAE_HOME/lib/jinja2-2.6:$PYTHONPATH
 PYTHONPATH=$GAE_HOME/lib/fancy_urllib:$PYTHONPATH
+PYTHONPATH=$GAE_HOME/lib/django-1.5:$PYTHONPATH
 export PYTHONPATH
 
 PATH=examples/chromedriver:$PATH
 
-export gcb_courses_config=5
-
+python -c 'import tests.xblock_module as tests; assert tests'
 python -m unittest tests.xblock_module
 
 # Ensure that failed tests don't terminate script before the server is shut down

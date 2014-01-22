@@ -165,11 +165,11 @@ class HtmlBlock(XBlock):
         return block
 
     def export_xml(self, node):
-        rooted_html = etree.HTML('<div>' + self.content + '</div>')
+        body = etree.HTML('<html><body>' + self.content + '</body></html>')[0]
 
         node.tag = self.xml_element_name()
-        node.text = rooted_html.text
-        for elt in rooted_html:
+        node.text = body.text
+        for elt in body:
             node.append(elt)
 
 

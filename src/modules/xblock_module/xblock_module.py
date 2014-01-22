@@ -40,9 +40,11 @@ from common import safe_dom
 from common import schema_fields
 from common import tags
 from controllers import utils
+import dbmodels
 import django.conf
 import django.template.loader
 from lxml import etree
+import messages
 from models import courses
 from models import custom_modules
 from models import transforms
@@ -54,17 +56,16 @@ from modules.oeditor import oeditor
 import webapp2
 import workbench.runtime
 import xblock.core
+import xblock.exceptions
 import xblock.field_data
 import xblock.fields
 import xblock.fragment
 import xblock.plugin
 import xblock.runtime
 
-import dbmodels
-import messages
-
 from google.appengine.api import users
 from google.appengine.ext import db
+from google.appengine.ext import ndb
 
 
 # URI routing for resources belonging to this module
@@ -91,8 +92,6 @@ XBLOCK_WHITELIST = [
     'vertical = cb_xblocks_core.cb_xblocks_core:VerticalBlock',
     'problem = cb_xblocks_core.problem:ProblemBlock'
 ]
-
-id_generator = appengine_xblock_runtime.runtime.IdGenerator()
 
 # XBlock runtime section
 
@@ -133,6 +132,31 @@ def select_xblock(identifier, entry_points):
         raise ForbiddenXBlockError(
             'Attempted to load forbidden XBlock: %s' % str(entry_point))
     return entry_point
+
+
+class IdGenerator(appengine_xblock_runtime.runtime.IdGenerator):
+    def create_usage(self, def_id, usage_id=None):
+        """Extend the method definition to allow a specified usage_id."""
+        if usage_id is None:
+            return super(IdGenerator, self).create_usage(def_id)
+
+        definition_key = ndb.Key(
+            appengine_xblock_runtime.store.DefinitionEntity, str(def_id))
+        assert definition_key.get() is not None
+
+        usage = appengine_xblock_runtime.store.UsageEntity(id=usage_id)
+        usage.definition_id = def_id
+        usage.put()
+        return usage_id
+
+
+class MemoryIdManager(xblock.runtime.MemoryIdManager):
+    def create_usage(self, def_id, usage_id=None):
+        """Extend the method definition to allow a specified usage_id."""
+        if usage_id is None:
+            return super(MemoryIdManager, self).create_usage(def_id)
+        self._usages[usage_id] = def_id
+        return usage_id
 
 
 class Runtime(appengine_xblock_runtime.runtime.Runtime):
@@ -218,25 +242,34 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
         """Override import method from XBlock runtime."""
         block_type = node.tag
         usage_id = node.get('usage_id')
-        if usage_id:
-            def_id = self.id_reader.get_definition_id(usage_id)
-        else:
+
+        if usage_id is None:
             def_id = _id_generator.create_definition(block_type)
             usage_id = _id_generator.create_usage(def_id)
+        else:
+            # Test whether or not the usage is already in the datastore. If it
+            # is not present, there will be a NoSuchUsage exception.
+            try:
+                def_id = self.id_reader.get_definition_id(usage_id)
+            except xblock.exceptions.NoSuchUsage:
+                def_id = _id_generator.create_definition(block_type)
+                _id_generator.create_usage(def_id, usage_id=usage_id)
+
         keys = xblock.fields.ScopeIds(
             xblock.fields.UserScope.NONE, block_type, def_id, usage_id)
         block_class = self.mixologist.mix(self.load_block_type(block_type))
+
+        # Load the block's fields and clear out any existing children
+        block = self.construct_xblock_from_class(block_class, keys)
+        if hasattr(block, 'children'):
+            block.children = []
+            block.save()
+
+        # Reload the block and attach new children
         block = block_class.parse_xml(node, self, keys, _id_generator)
         block.parent = parent_id
         block.save()
         return usage_id
-
-    def add_node_as_child(self, block, node, _id_generator):
-        """Override import method from XBlock runtime."""
-        usage_id = self._usage_id_from_node(
-            node, block.scope_ids.usage_id, _id_generator)
-        if usage_id not in block.children:
-            block.children.append(usage_id)
 
     def export_to_xml(self, block, xmlfile):
         """Override export method from XBlock runtime."""
@@ -354,6 +387,15 @@ class RootUsageDto(object):
     def usage_id(self):
         return self.dict.get('usage_id', '')
 
+    @property
+    def is_imported(self):
+        """Whether the usage was created as an import of an archive file.
+
+        Imported root usage entities are wiped and re-inserted when a new
+        archive is merged in; non-imported entities are left alone.
+        """
+        return self.dict.get('is_imported', False)
+
 
 class RootUsageDao(m_models.BaseJsonDao):
     """DAO for CRUD operations on root usage objects."""
@@ -366,12 +408,22 @@ class RootUsageDao(m_models.BaseJsonDao):
 EDITOR_HANDLERS = ['add_xblock', 'edit_xblock', 'import_xblock']
 
 
+_orig_get_template = dashboard.DashboardHandler.get_template
+
+
+def _get_template(the_dashboard, template_name, dirs):
+    return _orig_get_template(
+        the_dashboard, template_name, dirs + [os.path.dirname(__file__)])
+
+
 def _add_editor_to_dashboard():
     for handler in EDITOR_HANDLERS:
         dashboard.DashboardHandler.get_actions.append(handler)
         setattr(
             dashboard.DashboardHandler, 'get_%s' % handler,
             globals()['_get_%s' % handler])
+
+    setattr(dashboard.DashboardHandler, 'get_template', _get_template)
 
     dashboard.DashboardHandler.contrib_asset_listers.append(list_xblocks)
     dashboard.DashboardHandler.child_routes.append(
@@ -384,6 +436,8 @@ def _remove_editor_from_dashboard():
     for handler in EDITOR_HANDLERS:
         dashboard.DashboardHandler.get_actions.remove(handler)
         delattr(dashboard.DashboardHandler, 'get_%s' % handler)
+
+    setattr(dashboard.DashboardHandler, 'get_template', _orig_get_template)
 
     dashboard.DashboardHandler.contrib_asset_listers.remove(list_xblocks)
     dashboard.DashboardHandler.child_routes.remove(
@@ -399,13 +453,15 @@ def list_xblocks(the_dashboard):
 
     output = safe_dom.NodeList()
 
-    if not courses.Course(the_dashboard).get_units():
-        output.append(
-            safe_dom.Element(
-                'a', className='gcb-button gcb-pull-right',
-                href='dashboard?action=import_xblock'
-            ).add_text('Import')
-        )
+    import_button_text = 'Import'
+    if courses.Course(the_dashboard).get_units():
+        import_button_text = 'Merge'
+    output.append(
+        safe_dom.Element(
+            'a', className='gcb-button gcb-pull-right',
+            href='dashboard?action=import_xblock'
+        ).add_text(import_button_text)
+    )
 
     output.append(
         safe_dom.Element(
@@ -479,6 +535,10 @@ def _get_import_xblock(the_dashboard):
     """Render the screen for uploading an XBlock course tar.gx file."""
     rest_url = the_dashboard.canonicalize_url(XBlockArchiveRESTHandler.URI)
     exit_url = the_dashboard.canonicalize_url('/dashboard?action=assets')
+    extra_js_files = []
+
+    if courses.Course(the_dashboard).get_units():
+        extra_js_files.append('resources/merge.js')
 
     main_content = oeditor.ObjectEditor.get_html_for(
         the_dashboard,
@@ -489,7 +549,8 @@ def _get_import_xblock(the_dashboard):
         auto_return=True,
         save_method='upload',
         save_button_caption='Import',
-        required_modules=XBlockArchiveRESTHandler.REQUIRED_MODULES)
+        required_modules=XBlockArchiveRESTHandler.REQUIRED_MODULES,
+        extra_js_files=extra_js_files)
     template_values = {
         'page_title': messages.IMPORT_COURSE_PAGE_TITLE,
         'page_description': messages.IMPORT_COURSE_PAGE_DESCRIPTION,
@@ -583,7 +644,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
         try:
             rt = Runtime(self, is_admin=True)
             usage_id = rt.parse_xml_string(
-                unicode(payload['xml']).encode('utf_8'), id_generator)
+                unicode(payload['xml']).encode('utf_8'), IdGenerator())
         except Exception as e:  # pylint: disable=broad-except
             transforms.send_json_response(self, 412, str(e))
             return
@@ -682,9 +743,10 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
         try:
             course = courses.Course(self)
             rt = Runtime(self, is_admin=True)
+            journal = []
             importer = Importer(
                 archive=archive, course=course, fs=self.app_context.fs.impl,
-                rt=rt, dry_run=dry_run)
+                rt=rt, dry_run=dry_run, journal=journal)
             importer.parse()
 
             validation_errors = importer.validate()
@@ -699,7 +761,7 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
             if dry_run:
                 transforms.send_json_file_upload_response(
                     self, 412, # Status 412 needed to prevent page auto-return
-                    'Upload successfully validated')
+                    'Upload successfully validated:\n%s' % '\n'.join(journal))
                 return
 
             course.save()
@@ -720,18 +782,113 @@ class BadImportException(Exception):
     pass
 
 
+class Differ(object):
+    """Base class for tracking the difference between two lists of objects.
+
+    The types of object in the two lists need not be the same, and so subclasses
+    must implements methods which extract an 'id' from members of the 'old list'
+    and the 'new list'. The result will be three classes:
+
+      unbound: the set of objects in the old list whioch have no ids.
+      bindings: a dict of mappings of ids from the new list to objects with the
+          same id in the old list.
+      orphans: the set of objects in the old list which have ids but are do not
+          correspond to the ids of any elements in the new list.
+    """
+
+    def __init__(self, new_objects, old_objects):
+        self.unbound = set()
+        self._new_ids = set()
+        self.bindings = {}
+        self.orphans = set()
+
+        for new in new_objects:
+            _id = self.get_new_id(new)
+            assert _id
+            self._new_ids.add(_id)
+
+        for old in old_objects:
+            _id = self.get_old_id(old)
+            if not _id:
+                self.unbound.add(old)
+            elif _id in self._new_ids:
+                self.bindings[_id] = old
+            else:
+                self.orphans.add(old)
+
+    def get_new_id(self, new):
+        raise NotImplementedError()
+
+    def get_old_id(self, old):
+        raise NotImplementedError()
+
+    def bind(self, new, old):
+        raise NotImplementedError()
+
+
+class Sequential2LessonMapper(Differ):
+    """A class that handles mapping sequentials to lessons."""
+
+    def __init__(self, importer, chapter, unit):
+        super(Sequential2LessonMapper, self).__init__(
+            chapter, importer.course.get_lessons(unit.unit_id))
+
+    def get_new_id(self, sequential):
+        return sequential.attrib['usage_id']
+
+    def get_old_id(self, lesson):
+        return lesson.properties.get('xblock.usage_id')
+
+    def bind(self, sequential, lesson):
+        lesson.properties['xblock.usage_id'] = sequential.attrib['usage_id']
+
+
+class Chapter2UnitMapper(Differ):
+    """A class that handles mapping chapters to units."""
+
+    def __init__(self, importer):
+        super(Chapter2UnitMapper, self).__init__(
+            importer.course_root, importer.course.get_units())
+
+    def get_new_id(self, chapter):
+        return chapter.attrib['usage_id']
+
+    def get_old_id(self, unit):
+        return unit.properties.get('xblock.usage_id')
+
+    def bind(self, chapter, unit):
+        unit.properties['xblock.usage_id'] = chapter.attrib['usage_id']
+
+
 class Importer(object):
     """Manages the import of an XBlock archive file."""
 
     def __init__(
-            self, archive=None, course=None, fs=None, rt=None, dry_run=False):
+            self, archive=None, course=None, fs=None, rt=None, dry_run=False,
+            journal=None):
         self.archive = archive
         self.course = course
         self.fs = fs
+        # self.rt will be stubbed in dry_run mode; self.datastore_rt will always
+        # point to the real datastore
         self.rt = rt
+        self.datastore_rt = rt
         self.dry_run = dry_run
         self.base = self._get_base_folder_name()
         self.course_root = None
+        self.journal = journal if journal is not None else []
+
+        # If in dry_run mode, disable the runtime so that no XBlocks entities
+        # will be created
+        if self.dry_run:
+            id_manager = MemoryIdManager()
+            self.id_generator = id_manager
+            self.rt = Runtime(self.rt.handler, is_admin=True)
+            self.rt.id_reader = id_manager
+            self.rt.field_data = xblock.runtime.KvsFieldData(
+                xblock.runtime.DictKeyValueStore())
+        else:
+            self.id_generator = IdGenerator()
 
     def parse(self):
         """Assemble the XML files in the archive into a single DOM."""
@@ -760,12 +917,124 @@ class Importer(object):
 
         return errors
 
+    def _update_unit(self, chapter, unit):
+        new_title = chapter.attrib['display_name']
+        old_title = unit.title
+        unit.title = new_title
+        self.journal.append('Update unit title from \'%s\' to \'%s\'' % (
+            old_title, new_title))
+
+    def _create_unit(self, chapter):
+        assert chapter.tag == 'chapter'
+        unit = self.course.add_unit()
+        unit.title = chapter.attrib['display_name']
+        self.journal.append('Create unit \'%s\'' % unit.title)
+        return unit
+
+    def _update_lesson(self, sequential, lesson):
+        new_title = sequential.attrib['display_name']
+        old_title = lesson.title
+        lesson.title = new_title
+        self.journal.append('Update lesson title from \'%s\' to \'%s\'' % (
+            old_title, new_title))
+
+    def _create_lesson(self, sequential, unit):
+        assert sequential.tag == 'sequential'
+        lesson = self.course.add_lesson(unit)
+        lesson.title = sequential.attrib['display_name']
+        self.journal.append('Create lesson \'%s\'' % lesson.title)
+        return lesson
+
+    def _update_lesson_xblock_content(self, sequential, unit, lesson):
+        def xblock_to_str(block):
+            xml_buffer = StringIO()
+            self.rt.export_to_xml(block, xml_buffer)
+            return xml_buffer.getvalue()
+
+        xml_buffer = StringIO()
+        cElementTree.ElementTree(element=sequential).write(xml_buffer)
+        xml_str = xml_buffer.getvalue()
+
+        # Get the original XML repr of this sequential for comparison
+        usage_id = sequential.attrib['usage_id']
+        try:
+            orig_sequential = self.datastore_rt.get_block(usage_id)
+            orig_sequential_xml = xblock_to_str(orig_sequential)
+        except xblock.exceptions.NoSuchUsage:
+            orig_sequential_xml = ''
+
+        # Update the XBlock
+        usage_id = self.rt.parse_xml_string(xml_str, self.id_generator)
+
+        # Get the XML repr of the updated sequential for comparison
+        new_sequential = self.rt.get_block(usage_id)
+        new_sequential_xml = xblock_to_str(new_sequential)
+
+        # Journal the effect of the update
+        if orig_sequential_xml == new_sequential_xml:
+            action = 'unchanged'
+        elif not orig_sequential_xml:
+            action = 'inserted'
+        else:
+            action = 'updated'
+        self.journal.append(
+            'XBlock content %(action)s in \'%(title)s\' (%(id)s)' % {
+                'action': action, 'title': lesson.title, 'id': usage_id})
+
+        # Insert a RootUsageEntity to link the lesson to the XBlock
+        description = 'Unit %s, Lesson %s: %s' % (
+            unit.index, lesson.index, lesson.title)
+        root_usage = RootUsageDto(
+            None, {
+                'description': description,
+                'usage_id': usage_id,
+                'is_imported': True})
+        root_id = RootUsageDao.save(root_usage) if not self.dry_run else 'xxx'
+
+        # insert the xblock asset into lesson content
+        lesson.objectives = '<xblock root_id="%s"></xblock>' % root_id
+
+    def _delete_all_imported_root_usage_dtos(self):
+        dao = RootUsageDao()
+        for dto in RootUsageDao.get_all():
+            if dto.is_imported:
+                dao.delete(dto)
+
     def do_import(self):
         """Perform the import and create resources in CB."""
+        if not self.dry_run:
+            self._delete_all_imported_root_usage_dtos()
+
+        cu_mapper = Chapter2UnitMapper(self)
         for chapter in self.course_root:
-            unit = self._create_unit(chapter)
+            chapter_usage_id = chapter.attrib['usage_id']
+            unit = cu_mapper.bindings.get(chapter_usage_id)
+            if unit:
+                self._update_unit(chapter, unit)
+            else:
+                unit = self._create_unit(chapter)
+
+            cu_mapper.bind(chapter, unit)
+
+            sl_mapper = Sequential2LessonMapper(self, chapter, unit)
             for sequential in chapter:
-                self._create_lesson(unit, sequential)
+                sequential_usage_id = sequential.attrib['usage_id']
+                lesson = sl_mapper.bindings.get(sequential_usage_id)
+                if lesson:
+                    self._update_lesson(sequential, lesson)
+                else:
+                    lesson = self._create_lesson(sequential, unit)
+
+                sl_mapper.bind(sequential, lesson)
+                self._update_lesson_xblock_content(sequential, unit, lesson)
+
+            for lesson in sl_mapper.orphans:
+                self.journal.append('Delete lesson \'%s\'' % lesson.title)
+                self.course.delete_lesson(lesson)
+
+        for unit in cu_mapper.orphans:
+            self.journal.append('Delete unit \'%s\'' % unit.title)
+            self.course.delete_unit(unit)
 
         self._load_static_files()
 
@@ -781,7 +1050,10 @@ class Importer(object):
             target_path = '%s/%s/%s.xml' % (
                 self.base, node.tag, node.attrib['url_name'])
             target_file = self.archive.extractfile(target_path)
-            return self._walk_tree(cElementTree.parse(target_file).getroot())
+            sub_tree = self._walk_tree(
+                cElementTree.parse(target_file).getroot())
+            sub_tree.attrib['usage_id'] = node.attrib['url_name']
+            return sub_tree
         elif node.tag == 'html':
             if 'filename' in node.attrib:
                 # If the node is an <html/> block with externalized content,
@@ -809,37 +1081,6 @@ class Importer(object):
         for child in node:
             self._rebase_html_refs(child)
 
-    def _create_unit(self, chapter):
-        assert chapter.tag == 'chapter'
-        unit = self.course.add_unit()
-        unit.title = chapter.attrib['display_name']
-        return unit
-
-    def _create_lesson(self, unit, sequential):
-        def _get_xml(node):
-            xml_buffer = StringIO()
-            cElementTree.ElementTree(element=node).write(xml_buffer)
-            return xml_buffer.getvalue()
-
-        assert sequential.tag == 'sequential'
-
-        # create the lesson
-        lesson = self.course.add_lesson(unit)
-        lesson.title = sequential.attrib['display_name']
-
-        # create the xblock asset
-        usage_id = self.rt.parse_xml_string(_get_xml(sequential), id_generator)
-        description = 'Unit %s, Lesson %s: %s' % (
-            unit.index, lesson.index, lesson.title)
-        root_usage = RootUsageDto(
-            None, {'description': description, 'usage_id': usage_id})
-        root_id = RootUsageDao.save(root_usage) if not self.dry_run else 'xxx'
-
-        # insert the xblock asset into lesson content
-        lesson.objectives = '<xblock root_id="%s"></xblock>' % root_id
-
-        return lesson
-
     def _load_static_files(self):
         for member in self.archive.getmembers():
             if member.isfile() and member.name.startswith(
@@ -848,18 +1089,23 @@ class Importer(object):
 
     def _insert_file(self, member):
         """Extract the tarfile member into /assets/img/static."""
-        path = '/assets/img/%s' % member.name[len(self.base) + 1:]
-        path = self.fs.physical_to_logical(path)
+        ph_path = '/assets/img/%s' % member.name[len(self.base) + 1:]
+        path = self.fs.physical_to_logical(ph_path)
 
         if self.fs.isfile(path):
-            raise BadImportException('File already exists: %s' % member.name)
+            self.journal.append('Updating file \'%s\'' % ph_path)
+        else:
+            self.journal.append('Inserting file \'%s\'' % ph_path)
 
         if member.size > filer.MAX_ASSET_UPLOAD_SIZE_K * 1024:
             raise BadImportException(
                 'Cannot upload files bigger than %s K' %
                 filer.MAX_ASSET_UPLOAD_SIZE_K)
-        if not self.dry_run:
-            self.fs.put(path, self.archive.extractfile(member))
+
+        if self.dry_run:
+            return
+
+        self.fs.put(path, self.archive.extractfile(member))
 
 
 # XBlock component tag section
