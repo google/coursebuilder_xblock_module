@@ -154,12 +154,18 @@ class HtmlBlock(XBlock):
 
         block.content = unicode(node.text or u'')
         for child in node:
-            block.content += etree.tostring(child, encoding='unicode')
+            block.content += etree.tostring(
+                child,
+                # Store the content with HTML rather than  XML structure so as
+                # to correctly handle edge cases such as '<br>' (not '<br/>')
+                # and '<div></div>' (not '<div/>').
+                method='html',
+                encoding='unicode')
 
         return block
 
     def export_xml(self, node):
-        rooted_html = etree.fromstring('<div>' + self.content + '</div>')
+        rooted_html = etree.HTML('<div>' + self.content + '</div>')
 
         node.tag = self.xml_element_name()
         node.text = rooted_html.text
