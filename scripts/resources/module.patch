@@ -32,7 +32,7 @@ diff --git a/coursebuilder/appengine_config.py b/coursebuilder/appengine_config.
 index bbe8d44..1ef19ff 100755
 --- a/coursebuilder/appengine_config.py
 +++ b/coursebuilder/appengine_config.py
-@@ -73,6 +73,24 @@ THIRD_PARTY_LIBS = [
+@@ -73,6 +73,22 @@ THIRD_PARTY_LIBS = [
      # .zip repackaged from .tar.gz download.
      _Library('python-gflags-2.0.zip', relative_path='python-gflags-2.0'),
      _Library('pyparsing-1.5.7.zip'),
@@ -49,8 +49,6 @@ index bbe8d44..1ef19ff 100755
 +    _Library('python-dateutil-2.2.zip'),
 +    _Library('Mako-0.9.0.zip'),
 +    _Library('MarkupSafe-0.18.zip'),
-+    _Library('pyparsing-2.0.1.zip'),
-+    _Library('pytz-2013.9.zip'),
 +    _Library('PyYAML-3.10.zip'),
 +    _Library('six-1.5.2.zip'),
 +    _Library('capa_stubs')

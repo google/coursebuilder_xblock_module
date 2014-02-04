@@ -207,8 +207,6 @@ install_capa_deps() {
     https://pypi.python.org/packages/source/p/python-dateutil/python-dateutil-2.2.tar.gz \
     https://pypi.python.org/packages/source/M/Mako/Mako-0.9.0.tar.gz \
     https://pypi.python.org/packages/source/M/MarkupSafe/MarkupSafe-0.18.tar.gz \
-    https://pypi.python.org/packages/source/p/pyparsing/pyparsing-2.0.1.tar.gz \
-    https://pypi.python.org/packages/source/p/pytz/pytz-2013.9.tar.gz \
     https://pypi.python.org/packages/source/P/PyYAML/PyYAML-3.10.tar.gz \
     https://pypi.python.org/packages/source/s/six/six-1.5.2.tar.gz"
 
