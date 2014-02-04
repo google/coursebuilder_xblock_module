@@ -34,11 +34,13 @@ import tarfile
 import urllib
 from xml.etree import cElementTree
 
+import appengine_config
 import appengine_xblock_runtime.runtime
 import appengine_xblock_runtime.store
 from common import safe_dom
 from common import schema_fields
 from common import tags
+from controllers import sites
 from controllers import utils
 import dbmodels
 import django.conf
@@ -76,6 +78,8 @@ XBLOCK_RESOURCES_URI = '/modules/xblock_module/xblock_resources'
 XBLOCK_LOCAL_RESOURCES_URI = '/modules/xblock_module/xblock_local_resources'
 # URI routing used by Course Builder for call-backs to server-side XBlock code
 HANDLER_URI = '/modules/xblock_module/handler'
+# URI routing the the MathJax package
+MATHJAX_URI = '/modules/xblock_module/MathJax'
 
 # The location of the static workbench files used by the XBlocks
 WORKBENCH_STATIC_PATH = os.path.normpath('lib/XBlock/workbench/static')
@@ -1230,7 +1234,9 @@ def register_module():
         (XBLOCK_RESOURCES_URI + '/.*', XBlockResourcesHandler),
         (
             XBLOCK_LOCAL_RESOURCES_URI + r'/([^/]*)/(.*)',
-            XBlockLocalResourceHandler)]
+            XBlockLocalResourceHandler),
+        (MATHJAX_URI + '/(.*)', sites.make_zip_handler(os.path.join(
+            appengine_config.BUNDLE_ROOT, 'lib', 'MathJax.zip')))]
 
     namespaced_routes = [(HANDLER_URI, XBlockActionHandler)]
 

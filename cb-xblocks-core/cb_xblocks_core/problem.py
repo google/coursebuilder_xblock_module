@@ -26,6 +26,7 @@ from lxml import etree
 import mako.lookup
 from models import models as m_models
 from models import transforms
+from modules.xblock_module.xblock_module import MATHJAX_URI
 import webob
 import xblock.core
 import xblock.fragment
@@ -221,8 +222,8 @@ class ProblemBlock(xblock.core.XBlock, xmodule.capa_base.CapaMixin):
         frag = xblock.fragment.Fragment()
         frag.add_css_url(self.runtime.local_resource_url(
             self, 'public/css/problem.css'))
-        frag.add_javascript_url(self.runtime.local_resource_url(
-            self, 'MathJax/MathJax.js?config=TeX-AMS-MML_HTMLorMML'))
+        frag.add_javascript_url(
+            '%s/MathJax.js?config=TeX-AMS-MML_HTMLorMML' % MATHJAX_URI)
         frag.add_javascript_url(self.runtime.local_resource_url(
             self, 'edx-platform/common/static/js/vendor/underscore-min.js'))
         frag.add_javascript_url(self.runtime.local_resource_url(
