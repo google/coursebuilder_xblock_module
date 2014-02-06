@@ -232,7 +232,8 @@ install_capa_deps() {
   cd MathJax
   git checkout f3aaf3a2a3e964df2770dc4aaaa9c87ce5f47e2c
   rm -rf .git
-  zip -r ../MathJax.zip .
+  zip -r ../MathJax-fonts.zip ./fonts
+  zip -r ../MathJax.zip . -x fonts/\*
   cd ..
   rm -rf MathJax
   cd ../../..

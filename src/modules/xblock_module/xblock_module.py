@@ -1235,6 +1235,8 @@ def register_module():
         (
             XBLOCK_LOCAL_RESOURCES_URI + r'/([^/]*)/(.*)',
             XBlockLocalResourceHandler),
+        (MATHJAX_URI + '/(fonts/.*)', sites.make_zip_handler(os.path.join(
+            appengine_config.BUNDLE_ROOT, 'lib', 'MathJax-fonts.zip'))),
         (MATHJAX_URI + '/(.*)', sites.make_zip_handler(os.path.join(
             appengine_config.BUNDLE_ROOT, 'lib', 'MathJax.zip')))]
 
