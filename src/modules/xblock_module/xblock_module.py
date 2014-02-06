@@ -35,8 +35,8 @@ import urllib
 from xml.etree import cElementTree
 
 import appengine_config
+from appengine_xblock_runtime import store
 import appengine_xblock_runtime.runtime
-import appengine_xblock_runtime.store
 from common import safe_dom
 from common import schema_fields
 from common import tags
@@ -138,48 +138,41 @@ def select_xblock(identifier, entry_points):
     return entry_point
 
 
-class IdGenerator(appengine_xblock_runtime.runtime.IdGenerator):
-    def create_usage(self, def_id, usage_id=None):
-        """Extend the method definition to allow a specified usage_id."""
-        if usage_id is None:
-            return super(IdGenerator, self).create_usage(def_id)
-
-        definition_key = ndb.Key(
-            appengine_xblock_runtime.store.DefinitionEntity, str(def_id))
-        assert definition_key.get() is not None
-
-        usage = appengine_xblock_runtime.store.UsageEntity(id=usage_id)
-        usage.definition_id = def_id
-        usage.put()
-        return usage_id
-
-
 class MemoryIdManager(xblock.runtime.MemoryIdManager):
+
     def create_usage(self, def_id, usage_id=None):
         """Extend the method definition to allow a specified usage_id."""
-        if usage_id is None:
-            return super(MemoryIdManager, self).create_usage(def_id)
+        usage_id = usage_id or appengine_xblock_runtime.runtime.generate_id()
         self._usages[usage_id] = def_id
         return usage_id
+
+    def create_definition(self, block_type, def_id=None):
+        """Extend the method definition to allow a specified def_id."""
+        def_id = def_id or appengine_xblock_runtime.runtime.generate_id()
+        self._definitions[def_id] = block_type
+        return def_id
 
 
 class Runtime(appengine_xblock_runtime.runtime.Runtime):
     """A XBlock runtime which uses the App Engine datastore."""
 
-    def __init__(self, handler, student_id=None, is_admin=False):
+    def __init__(
+            self, handler, id_reader=None, field_data=None, student_id=None,
+            is_admin=False):
 
-        db_data = xblock.runtime.DbModel(
-            appengine_xblock_runtime.store.KeyValueStore())
+        field_data = field_data or xblock.runtime.KvsFieldData(
+            store.KeyValueStore())
 
         if is_admin:
-            field_data = db_data
+            pass
         elif student_id:
-            field_data = StudentFieldData(db_data)
+            field_data = StudentFieldData(field_data)
         else:
-            field_data = xblock.field_data.ReadOnlyFieldData(db_data)
+            field_data = xblock.field_data.ReadOnlyFieldData(field_data)
 
         super(Runtime, self).__init__(
-            field_data=field_data, student_id=student_id, select=select_xblock)
+            id_reader=id_reader, field_data=field_data, student_id=student_id,
+            select=select_xblock)
         self.handler = handler
 
     def render_template(self, template_name, **kwargs):
@@ -248,15 +241,21 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
         usage_id = node.get('usage_id')
 
         if usage_id is None:
+            # In Course Builder the usages and defs are in 1-1
+            # correspondence so for definiteness, make id's the same
             def_id = _id_generator.create_definition(block_type)
-            usage_id = _id_generator.create_usage(def_id)
+            usage_id = _id_generator.create_usage(def_id, usage_id=def_id)
         else:
             # Test whether or not the usage is already in the datastore. If it
             # is not present, there will be a NoSuchUsage exception.
             try:
                 def_id = self.id_reader.get_definition_id(usage_id)
             except xblock.exceptions.NoSuchUsage:
-                def_id = _id_generator.create_definition(block_type)
+                # In Course Builder the usages and defs are in 1-1
+                # correspondence so for definiteness, make id's the same
+                def_id = usage_id
+                def_id = _id_generator.create_definition(
+                    block_type, def_id=def_id)
                 _id_generator.create_usage(def_id, usage_id=usage_id)
 
         keys = xblock.fields.ScopeIds(
@@ -266,6 +265,10 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
         # Load the block's fields and clear out any existing children
         block = self.construct_xblock_from_class(block_class, keys)
         if hasattr(block, 'children'):
+            # We need to force an explict save of the 'children' field
+            # and so first we have to make it dirty
+            block.children = ['dirt']
+            block.save()
             block.children = []
             block.save()
 
@@ -319,6 +322,82 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             'xblock-event',
             users.get_current_user(),
             transforms.dumps(wrapper))
+
+    def parse_xml_string(
+            self, xml_str, unused_id_generator, orig_xml_str=None,
+            dry_run=False, log=None):
+        """Override parse_xml_string to make it asynchronous.
+
+        Calls to this method will execute using NDB's asynchronous API. In order
+        to ensure all the Datastore RPC's terminate successfully, it is
+        essential that some method higher up the call stack (e.g., the request
+        handler) should be decorated with @ndb.toplevel.
+
+        Args:
+            xml_str: str. The string of XML which will be parsed as XBlocks.
+            unused_id_generator: IdGenerator. The XBlock API allows the runtime
+                to use different usage- and definition-generators, but in this
+                implementation, the only write target is the App Engine
+                Datastore.
+            orig_xml_str: str. The XML representation of the existing block in
+                the datastore, if it exists.
+            dry_run: bool. If set True, then parse the XML but do not do any
+                datastore writes.
+            log: file-like. A buffer to write back the XML representation of the
+                XBlock tree which has been assembled.
+
+        Returns:
+            str. The usage id of the root block of the XML tree.
+        """
+        if orig_xml_str is None:
+            orig_xml_str = ''
+        if log is None:
+            log = StringIO()
+
+        id_manager = MemoryIdManager()
+        dict_key_value_store = xblock.runtime.DictKeyValueStore()
+
+        old_id_reader = self.id_reader
+        self.id_reader = id_manager
+
+        old_field_data = self.field_data
+        self.field_data = xblock.runtime.KvsFieldData(dict_key_value_store)
+
+        try:
+            root_usage_id = super(Runtime, self).parse_xml_string(
+                xml_str, id_manager)
+
+            block = self.get_block(root_usage_id)
+            self.export_to_xml(block, log)
+        finally:
+            self.id_reader = old_id_reader
+            self.field_data = old_field_data
+
+        if dry_run or log.getvalue() == orig_xml_str:
+            return root_usage_id
+
+        entities = []
+        for key, value in dict_key_value_store.db_dict.iteritems():
+            ndb_key = ndb.Key(store.KeyValueEntity, store.key_string(key))
+            kv_entity = store.KeyValueEntity(key=ndb_key)
+            kv_entity.value = value
+            entities.append(kv_entity)
+
+        for def_id, block_type in id_manager._definitions.iteritems():
+            ndb_key = ndb.Key(store.DefinitionEntity, def_id)
+            def_entity = store.DefinitionEntity(key=ndb_key)
+            def_entity.block_type = block_type
+            entities.append(def_entity)
+
+        for usage_id, def_id in id_manager._usages.iteritems():
+            ndb_key = ndb.Key(store.UsageEntity, usage_id)
+            usage_entity = store.UsageEntity(key=ndb_key)
+            usage_entity.definition_id = def_id
+            entities.append(usage_entity)
+
+        ndb.put_multi_async(entities)
+
+        return root_usage_id
 
 
 class XBlockActionHandler(utils.BaseHandler):
@@ -397,6 +476,9 @@ class RootUsageDto(object):
 
         Imported root usage entities are wiped and re-inserted when a new
         archive is merged in; non-imported entities are left alone.
+
+        Returns:
+            bool. Whether the usage was created as part of an import.
         """
         return self.dict.get('is_imported', False)
 
@@ -626,6 +708,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
 
         return validated_dict, errors
 
+    @ndb.toplevel
     def put(self):
         request = transforms.loads(self.request.get('request'))
         key = request.get('key') or None
@@ -648,7 +731,7 @@ class XBlockEditorRESTHandler(utils.BaseRESTHandler):
         try:
             rt = Runtime(self, is_admin=True)
             usage_id = rt.parse_xml_string(
-                unicode(payload['xml']).encode('utf_8'), IdGenerator())
+                unicode(payload['xml']).encode('utf_8'), None)
         except Exception as e:  # pylint: disable=broad-except
             transforms.send_json_response(self, 412, str(e))
             return
@@ -705,6 +788,7 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
             xsrf_token=utils.XsrfTokenManager.create_xsrf_token(
                 self.XSRF_TOKEN))
 
+    @ndb.toplevel
     def post(self):
         assert courses.is_editable_fs(self.app_context)
 
@@ -873,26 +957,11 @@ class Importer(object):
         self.archive = archive
         self.course = course
         self.fs = fs
-        # self.rt will be stubbed in dry_run mode; self.datastore_rt will always
-        # point to the real datastore
         self.rt = rt
-        self.datastore_rt = rt
         self.dry_run = dry_run
         self.base = self._get_base_folder_name()
         self.course_root = None
         self.journal = journal if journal is not None else []
-
-        # If in dry_run mode, disable the runtime so that no XBlocks entities
-        # will be created
-        if self.dry_run:
-            id_manager = MemoryIdManager()
-            self.id_generator = id_manager
-            self.rt = Runtime(self.rt.handler, is_admin=True)
-            self.rt.id_reader = id_manager
-            self.rt.field_data = xblock.runtime.KvsFieldData(
-                xblock.runtime.DictKeyValueStore())
-        else:
-            self.id_generator = IdGenerator()
 
     def parse(self):
         """Assemble the XML files in the archive into a single DOM."""
@@ -950,37 +1019,32 @@ class Importer(object):
         return lesson
 
     def _update_lesson_xblock_content(self, sequential, unit, lesson):
-        def xblock_to_str(block):
-            xml_buffer = StringIO()
-            self.rt.export_to_xml(block, xml_buffer)
-            return xml_buffer.getvalue()
-
         xml_buffer = StringIO()
         cElementTree.ElementTree(element=sequential).write(xml_buffer)
-        xml_str = xml_buffer.getvalue()
+
+        orig_xml_buff = StringIO()
+        new_xml_buff = StringIO()
 
         # Get the original XML repr of this sequential for comparison
         usage_id = sequential.attrib['usage_id']
         try:
-            orig_sequential = self.datastore_rt.get_block(usage_id)
-            orig_sequential_xml = xblock_to_str(orig_sequential)
+            orig_xml = self.rt.get_block(usage_id)
+            self.rt.export_to_xml(orig_xml, orig_xml_buff)
         except xblock.exceptions.NoSuchUsage:
-            orig_sequential_xml = ''
+            pass  # Buffer will be empty
 
-        # Update the XBlock
-        usage_id = self.rt.parse_xml_string(xml_str, self.id_generator)
-
-        # Get the XML repr of the updated sequential for comparison
-        new_sequential = self.rt.get_block(usage_id)
-        new_sequential_xml = xblock_to_str(new_sequential)
+        usage_id = self.rt.parse_xml_string(
+            xml_buffer.getvalue(), None, orig_xml_str=orig_xml_buff.getvalue(),
+            dry_run=self.dry_run, log=new_xml_buff)
 
         # Journal the effect of the update
-        if orig_sequential_xml == new_sequential_xml:
+        if orig_xml_buff.getvalue() == new_xml_buff.getvalue():
             action = 'unchanged'
-        elif not orig_sequential_xml:
+        elif not orig_xml_buff.getvalue():
             action = 'inserted'
         else:
             action = 'updated'
+
         self.journal.append(
             'XBlock content %(action)s in \'%(title)s\' (%(id)s)' % {
                 'action': action, 'title': lesson.title, 'id': usage_id})

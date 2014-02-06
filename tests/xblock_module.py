@@ -40,13 +40,14 @@ from tests.functional import actions
 from tests.functional import test_classes
 
 from google.appengine.api import namespace_manager
+from google.appengine.ext import ndb
 
 THUMBS_ENTRY_POINT = 'thumbs = thumbs:ThumbsBlock'
 
 
 def insert_thumbs_block():
     rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-    usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+    usage_id = parse_xml_string(rt, '<thumbs/>')
     data = {'description': 'an xblock', 'usage_id': usage_id}
     root_usage = xblock_module.RootUsageDto(None, data)
     return xblock_module.RootUsageDao.save(root_usage)
@@ -59,12 +60,14 @@ def parse_html_string(html_doc):
     return parser.parse(html_doc)
 
 
+@ndb.toplevel
+def parse_xml_string(rt, xml_str, dry_run=False):
+    return rt.parse_xml_string(xml_str, None, dry_run=dry_run)
+
+
 class MockHandler(object):
     def canonicalize_url(self, location):
         return '/new_course' + location
-
-
-id_generator = xblock_module.IdGenerator()
 
 
 class TestBase(actions.TestBase):
@@ -104,7 +107,7 @@ class DataMigrationTests(TestBase):
         namespace_manager.set_namespace('ns_a')
 
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html>Text</html>', id_generator)
+        usage_id = parse_xml_string(rt, '<html>Text</html>')
         data = {'description': 'an xblock', 'usage_id': usage_id}
         root_usage = xblock_module.RootUsageDto(None, data)
         key = xblock_module.RootUsageDao.save(root_usage)
@@ -135,7 +138,7 @@ class DataMigrationTests(TestBase):
         namespace_manager.set_namespace('ns_a')
 
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html>Text</html>', id_generator)
+        usage_id = parse_xml_string(rt, '<html>Text</html>')
         data = {'description': 'an xblock', 'usage_id': usage_id}
         root_usage = xblock_module.RootUsageDto(None, data)
         key = xblock_module.RootUsageDao.save(root_usage)
@@ -172,7 +175,7 @@ class RuntimeTestCase(TestBase):
     def test_runtime_exports_blocks_with_ids(self):
         """The XBlock runtime should include block ids in XML exports."""
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html>text</html>', id_generator)
+        usage_id = parse_xml_string(rt, '<html>text</html>')
         xml = '<html usage_id="%s">text</html>' % usage_id
 
         block = rt.get_block(usage_id)
@@ -183,11 +186,11 @@ class RuntimeTestCase(TestBase):
     def test_runtime_updates_blocks_with_ids(self):
         """The workbench should update blocks in place when they have ids."""
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html>foo</html>', id_generator)
+        usage_id = parse_xml_string(rt, '<html>foo</html>')
         self.assertEqual('foo', rt.get_block(usage_id).content)
 
         xml = '<html usage_id="%s">bar</html>' % usage_id
-        new_usage_id = rt.parse_xml_string(xml, id_generator)
+        new_usage_id = parse_xml_string(rt, xml)
         self.assertEqual(usage_id, new_usage_id)
         self.assertEqual('bar', rt.get_block(usage_id).content)
 
@@ -202,14 +205,14 @@ class RuntimeTestCase(TestBase):
 </vertical>"""
 
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        rt.parse_xml_string(block_with_child_xml, id_generator)
+        parse_xml_string(rt, block_with_child_xml)
         vertical = rt.get_block('vertical_id')
         self.assertEqual(1, len(vertical.children))
 
-        # Merge in same vertical, with html blocm deleted and check it is
+        # Merge in same vertical, with html block deleted and check it is
         # deleted from the block tree
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        rt.parse_xml_string(block_without_child_xml, id_generator)
+        parse_xml_string(rt, block_without_child_xml)
         vertical = rt.get_block('vertical_id')
         self.assertEqual(0, len(vertical.children))
 
@@ -222,15 +225,14 @@ class RuntimeTestCase(TestBase):
     def test_runtime_should_import_blocks_with_specified_ids(self):
         """The workbench shouild create a new block with a given id."""
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string(
-            '<html usage_id="my_usage_id">foo</html>', id_generator)
+        parse_xml_string(rt, '<html usage_id="my_usage_id">foo</html>')
         block = rt.get_block('my_usage_id')
         self.assertEqual('html', block.xml_element_name())
         self.assertEqual('foo', block.content)
 
     def test_rendered_blocks_have_js_dependencies_included(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+        usage_id = parse_xml_string(rt, '<thumbs/>')
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         block = rt.get_block(usage_id)
         frag = rt.render(block, 'student_view')
@@ -242,7 +244,7 @@ class RuntimeTestCase(TestBase):
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBLOCK_XSRF_TOKEN_NAME)
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+        usage_id = parse_xml_string(rt, '<thumbs/>')
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
         block = rt.get_block(usage_id)
         url = urlparse.urlparse(rt.handler_url(block, 'vote'))
@@ -254,7 +256,7 @@ class RuntimeTestCase(TestBase):
 
     def test_runtime_prevents_student_writes_to_non_student_fields(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<html>Test</html>', id_generator)
+        usage_id = parse_xml_string(rt, '<html>Test</html>')
 
         # Load the block in student role
         rt = xblock_module.Runtime(MockHandler(), student_id='s23')
@@ -277,13 +279,13 @@ class RuntimeTestCase(TestBase):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
 
         # Loading thumbs block succeeds when it is whitelisted
-        unused_usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+        unused_usage_id = parse_xml_string(rt, '<thumbs/>')
 
         # Loading thumbs block fails when it is not whitelisted
         xblock_module.XBLOCK_WHITELIST.remove(THUMBS_ENTRY_POINT)
         xblock.core.XBlock._plugin_cache = None  # pylint: disable=protected-access
         try:
-            unused_usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+            unused_usage_id = parse_xml_string(rt, '<thumbs/>')
             self.fail('Expected ForbiddenXBlockError')
         except xblock_module.ForbiddenXBlockError:
             pass  # Expected exception
@@ -295,7 +297,7 @@ class XBlockActionHandlerTestCase(TestBase):
     def test_post(self):
         actions.login('user@example.com')
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+        usage_id = parse_xml_string(rt, '<thumbs/>')
         self.assertEqual(0, rt.get_block(usage_id).upvotes)
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBLOCK_XSRF_TOKEN_NAME)
@@ -314,7 +316,7 @@ class XBlockActionHandlerTestCase(TestBase):
         """Callbacks with bad XSRF token should be rejected."""
         actions.login('user@example.com')
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+        usage_id = parse_xml_string(rt, '<thumbs/>')
 
         params = {
             'usage': usage_id,
@@ -328,7 +330,7 @@ class XBlockActionHandlerTestCase(TestBase):
 
     def test_post_without_user_rejected(self):
         rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = rt.parse_xml_string('<thumbs/>', id_generator)
+        usage_id = parse_xml_string(rt, '<thumbs/>')
 
         params = {
             'usage': usage_id,
@@ -406,7 +408,8 @@ class XBlockEditorTestCase(TestBase):
 
         button = get_import_button()
         self.assertEquals('Import', button.text)
-        self.assertEquals('dashboard?action=import_xblock', button.attrib['href'])
+        self.assertEquals(
+            'dashboard?action=import_xblock', button.attrib['href'])
 
         # Add some content to the class. Import should not appear now.
         app_context = sites.get_all_courses()[0]
@@ -416,7 +419,8 @@ class XBlockEditorTestCase(TestBase):
 
         button = get_import_button()
         self.assertEquals('Merge', button.text)
-        self.assertEquals('dashboard?action=import_xblock', button.attrib['href'])
+        self.assertEquals(
+            'dashboard?action=import_xblock', button.attrib['href'])
 
     def test_edit_xblock_editor_present(self):
         root_usage_id = insert_thumbs_block()
@@ -868,7 +872,8 @@ Updating file '/assets/img/static/test.png'"""
         xsrf_token = utils.XsrfTokenManager.create_xsrf_token(
             xblock_module.XBlockEditorRESTHandler.XSRF_TOKEN)
         response = self.put(
-            'rest/xblock', XBlockEditorRESTHandlerTestCase.get_request(xsrf_token))
+            'rest/xblock',
+            XBlockEditorRESTHandlerTestCase.get_request(xsrf_token))
         resp_dict = transforms.loads(response.body)
         self.assertEqual(200, resp_dict['status'])
         payload = transforms.loads(resp_dict['payload'])
