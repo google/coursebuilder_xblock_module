@@ -312,6 +312,16 @@ require_selenium() {
 fi
 }
 
+require_test_xblocks() {
+  if [ ! -d examples/coursebuilder/lib/test-xblocks ]; then
+    cd examples/coursebuilder/lib
+    ln -s ../../../tests/test-xblocks .
+    cd test-xblocks
+    python setup.py egg_info
+    cd ../../../..
+  fi
+}
+
 install_run_requirements() {
   require_course_builder
   require_gae
@@ -319,6 +329,7 @@ install_run_requirements() {
 
 install_test_requirements() {
   install_run_requirements
+  require_test_xblocks
   require_webtest
   require_selenium
 }
