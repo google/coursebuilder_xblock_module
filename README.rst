@@ -15,7 +15,7 @@ Requirements
 You will need a Bash environment to run the installation scripts. The scripts
 use standard developments tools, including Python 2.7, ``git``, and
 ``zip``/``unzip``. In addition you must have the following Python packages
-installed: ``setuptools``, ``lxml``, ``numpy``.
+installed: ``setuptools 2.1.2``, ``lxml 2.3.2``, ``numpy 1.6.1``.
 
 
 Running the example application locally
@@ -29,7 +29,8 @@ development server. To set up and run the application, execute:
   sh ./scripts/run_example.sh
 
 This will set up a copy of Course Builder in ``examples/`` with the XBlock
-module installed, and will start the App Engine development server.
+module installed, and will start the App Engine development server. The script
+accepts ``dev_appserver.py`` flags.
 
 
 Running the example application on production App Engine
