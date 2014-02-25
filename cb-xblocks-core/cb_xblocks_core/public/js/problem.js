@@ -10,11 +10,12 @@ var Logger = {
 
 var analytics = {
   track: function(msg, data) {
-    gcbAudit && gcbAudit({
+    gcbTagEventAudit && gcbTagEventAudit({
       event: 'xblock-problem',
       message: msg,
       data: data
-    });
+    },
+    'xblock-event');
   }
 };
 

@@ -1,0 +1,65 @@
+.cb-oeditor-xblock-import-msg {
+  white-space: pre;
+  margin-top: 15px;
+  padding: 10px;
+  border: solid #ccc 1px;
+  border-radius: 5px;
+  background-color: #f8f8f8;
+  display: none;
+}
+.cb-oeditor-xblock-import-msg.error {
+  border: solid red 2px;
+}
+.ajax-loading {
+  font-size: 6em;
+  text-align: center;
+  color: #009a5d;
+  width: 100%;
+  position: fixed;
+  top: 40px;
+  left: 0;
+  z-index: 1000;
+  display: none;
+}
+.ajax-loading-dot-one {
+  opacity: 0;
+  animation: dot 1.5s infinite;
+  animation-delay: 0.0s;
+  -moz-animation: dot 1.5s infinite;
+  -moz-animation-delay: 0.0s;
+  -webkit-animation: dot 1.5s infinite;
+  -webkit-animation-delay: 0.0s;
+}
+.ajax-loading-dot-two {
+  opacity: 0;
+  animation: dot 1.5s infinite;
+  animation-delay: 0.3s;
+  -moz-animation: dot 1.5s infinite;
+  -moz-animation-delay: 0.3s;
+  -webkit-animation: dot 1.5s infinite;
+  -webkit-animation-delay: 0.3s;
+}
+.ajax-loading-dot-three {
+  opacity: 0;
+  animation: dot 1.5s infinite;
+  animation-delay: 0.6s;
+  -moz-animation: dot 1.5s infinite;
+  -moz-animation-delay: 0.6s;
+  -webkit-animation: dot 1.5s infinite;
+  -webkit-animation-delay: 0.6s;
+}
+@-webkit-keyframes dot {
+  0% { opacity: 0; }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@-moz-keyframes dot {
+  0% { opacity: 0; }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@-keyframes dot {
+  0% { opacity: 0; }
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}

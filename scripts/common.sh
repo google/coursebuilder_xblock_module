@@ -22,8 +22,8 @@ set -e
 
 GCB_GIT_URL=https://code.google.com/p/course-builder/
 GCB_REPO_NAME=course-builder
-GCB_GIT_REV=7207a44095c6
-GCB_ZIP=https://course-builder.googlecode.com/files/coursebuilder_20130814_214936.zip
+GCB_GIT_REV=1842c3c822bd
+GCB_ZIP=http://releases.course-builder.googlecode.com/git/coursebuilder_1.6.0_20140221_144131.zip
 
 XBLOCK_GIT_URL=https://github.com/edx/XBlock.git
 XBLOCK_GIT_REV=de92d3bf798699a6bbd06b54012ef15934c41ac0
@@ -34,9 +34,9 @@ EDX_PLATFORM_REV=87aa71c4506c421a775c2cb732b4b813836c283c
 
 GAE_XBLOCK_LIB_GIT_URL=https://github.com/google/appengine_xblock_runtime.git
 GAE_XBLOCK_LIB_REPO_NAME=appengine_xblock_runtime
-GAE_XBLOCK_LIB_GIT_REV=d367d548248d8dce8663c4e38050fdefd3ed651b
+GAE_XBLOCK_LIB_GIT_REV=f0ef6fb8b6db01bdc15c10dd5858b4e77a58ee84
 
-GAE_URL=http://googleappengine.googlecode.com/files/google_appengine_1.8.2.zip
+GAE_URL=http://googleappengine.googlecode.com/files/google_appengine_1.8.9.zip
 
 clean_examples_folder() {
   cd examples

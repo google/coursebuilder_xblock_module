@@ -1,16 +1,5 @@
-From 3a349d3fb3c4fd5bcbe079c5fc759f44cfad1184 Mon Sep 17 00:00:00 2001
-From: John Orr <jorr@google.com>
-Date: Wed, 30 Oct 2013 17:59:48 -0700
-Subject: [PATCH] get patched files
-
----
- coursebuilder/app.yaml            | 4 ++++
- coursebuilder/appengine_config.py | 3 +++
- coursebuilder/main.py             | 2 ++
- 3 files changed, 9 insertions(+)
-
 diff --git a/coursebuilder/app.yaml b/coursebuilder/app.yaml
-index 5519fb0..812a0e8 100755
+index 3f47f88..a5947ed 100644
 --- a/coursebuilder/app.yaml
 +++ b/coursebuilder/app.yaml
 @@ -16,8 +16,14 @@ builtins:
@@ -29,10 +18,10 @@ index 5519fb0..812a0e8 100755
    version: "2.5.2"
  - name: webob
 diff --git a/coursebuilder/appengine_config.py b/coursebuilder/appengine_config.py
-index bbe8d44..1ef19ff 100755
+index f9c49f9..190818e 100644
 --- a/coursebuilder/appengine_config.py
 +++ b/coursebuilder/appengine_config.py
-@@ -73,6 +73,22 @@ THIRD_PARTY_LIBS = [
+@@ -74,6 +74,22 @@ THIRD_PARTY_LIBS = [
      # .zip repackaged from .tar.gz download.
      _Library('python-gflags-2.0.zip', relative_path='python-gflags-2.0'),
      _Library('pyparsing-1.5.7.zip'),
@@ -51,30 +40,27 @@ index bbe8d44..1ef19ff 100755
 +    _Library('MarkupSafe-0.18.zip'),
 +    _Library('PyYAML-3.10.zip'),
 +    _Library('six-1.5.2.zip'),
-+    _Library('capa_stubs')
++    _Library('capa_stubs'),
  ]
  
  
 diff --git a/coursebuilder/main.py b/coursebuilder/main.py
-index 8380767..11d8872 100755
+index 5b06f75..6ff1e42 100644
 --- a/coursebuilder/main.py
 +++ b/coursebuilder/main.py
-@@ -37,6 +37,7 @@ import modules.oeditor.oeditor
- import modules.review.review
- import modules.search.search
- import modules.upload.upload
+@@ -39,6 +39,7 @@ from modules.oeditor import oeditor
+ from modules.review import review
+ from modules.search import search
+ from modules.upload import upload
 +import modules.xblock_module.xblock_module
  
  # use this flag to control debug only features
  debug = not appengine_config.PRODUCTION_MODE
-@@ -53,6 +54,7 @@ modules.oeditor.oeditor.register_module().enable()
- modules.review.review.register_module().enable()
- modules.search.search.register_module().enable()
- modules.upload.upload.register_module().enable()
+@@ -57,6 +58,7 @@ oeditor.register_module().enable()
+ review.register_module().enable()
+ search.register_module().enable()
+ upload.register_module().enable()
 +modules.xblock_module.xblock_module.register_module().enable()
  
  # register modules that are not enabled by default.
- modules.oauth2.oauth2.register_module()
--- 
-1.8.4.1
-
+ oauth2.register_module()

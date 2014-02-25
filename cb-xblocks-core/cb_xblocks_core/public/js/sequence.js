@@ -1,6 +1,17 @@
 function SequenceBlock(runtime, element) {
   element = $(element);
-  var position = element.find("div.sequence_block").data("position") || 0;
+
+  var GCB_NAV_PREV_HASH = '#cb-xblocks-core-nav-prev';
+  var GCB_NAV_NEXT_HASH = '#cb-xblocks-core-nav-next';
+
+  var gcbPrevButtonLabel = element.find(".button-labels > .prev").text();
+  var gcbNextButtonLabel = element.find(".button-labels > .next").text();
+  var gcbEndButtonLabel = element.find(".button-labels > .end").text();
+
+  var gcbPrevButtonUri = $("div.gcb-prev-button > a").attr("href");
+  var gcbNextButtonUri = $("div.gcb-next-button > a").attr("href");
+
+  var position;
   var lastTabIndex = element.find("li.nav_button").length - 1;
   var prevButton = $(element.find("li.prev").get(0));
   var nextButton = $(element.find("li.next").get(0));
@@ -29,6 +40,19 @@ function SequenceBlock(runtime, element) {
         url: runtime.handlerUrl(element.get(0), 'on_select'),
         data: JSON.stringify({position: index})
     });
+
+    if (index == 0 && gcbPrevButtonUri == 'course') {
+      $("div.gcb-prev-button > a").css('display', 'none');
+    } else {
+      $("div.gcb-prev-button > a").css('display', '');
+      $("div.gcb-prev-button > a").text(gcbPrevButtonLabel);
+    }
+
+    if (index == lastTabIndex && gcbNextButtonUri == 'course') {
+      $("div.gcb-next-button > a").text(gcbEndButtonLabel);
+    } else {
+      $("div.gcb-next-button > a").text(gcbNextButtonLabel);
+    }
   }
 
   function bind() {
@@ -48,8 +72,48 @@ function SequenceBlock(runtime, element) {
         display(++position);
       }
     });
+
+    // If CB has omitted the Prev button, restore it
+    if ($("div.gcb-prev-button > a").length == 0) {
+      $("div.gcb-prev-button").html('<a href="course"></a>')
+      gcbPrevButtonUri = 'course';
+    }
+
+    // Remove the HREF actions on the CB Prev and Next buttons
+    $("div.gcb-prev-button > a, div.gcb-next-button > a")
+        .attr('href', 'javascript:void(0)');
+
+    $("div.gcb-prev-button > a").click(function() {
+      if (position > 0) {
+        display(--position);
+      } else {
+        window.location = gcbPrevButtonUri + GCB_NAV_PREV_HASH;
+      }
+    });
+
+    $("div.gcb-next-button > a").click(function() {
+      if (position < lastTabIndex) {
+        display(++position);
+      } else {
+        window.location = gcbNextButtonUri + GCB_NAV_NEXT_HASH;
+      }
+    });
+  }
+
+  function initialDisplay() {
+    if (window.location.hash == GCB_NAV_PREV_HASH) {
+      position = lastTabIndex;
+      window.location.hash = '';
+    } else if (window.location.hash == GCB_NAV_NEXT_HASH) {
+      position = 0;
+      window.location.hash = '';
+    } else {
+      position = element.find("div.sequence_block").data("position") || 0;
+    }
+
+    display(position);
   }
 
   bind();
-  display(position);
+  initialDisplay();
 }

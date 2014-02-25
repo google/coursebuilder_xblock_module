@@ -39,7 +39,9 @@ from xblock import fragment
 from tests.functional import actions
 from tests.functional import test_classes
 
+from google.appengine.api import files
 from google.appengine.api import namespace_manager
+from google.appengine.ext import blobstore
 from google.appengine.ext import ndb
 
 THUMBS_ENTRY_POINT = 'thumbs = thumbs:ThumbsBlock'
@@ -397,7 +399,7 @@ class XBlockEditorTestCase(TestBase):
             'href="dashboard?action=add_xblock">Add XBlock</a>', response.body)
 
         response = self.get('dashboard?action=add_xblock')
-        self.assertIn('<h2>Add XBlock</h2>', response.body)
+        self.assertIn('Add XBlock', response.body)
 
     def test_import_xblock_button(self):
         """Import button present if class empty, absent if it has content."""
@@ -430,7 +432,7 @@ class XBlockEditorTestCase(TestBase):
         self.assertIn('href="%s">[Edit]</a>' % editor_url, response.body)
 
         response = self.get(editor_url)
-        self.assertIn('<h2>Edit XBlock</h2>', response.body)
+        self.assertIn('Edit XBlock', response.body)
 
     def test_editor_and_import_unavailable_when_module_disabled(self):
         xblock_module.custom_module.disable()
@@ -580,6 +582,8 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
 
     def setUp(self):
         super(XBlockArchiveRESTHandlerTestCase, self).setUp()
+        self.testbed.init_blobstore_stub()
+        self.testbed.init_files_stub()
         self.base = '/test'
         sites.setup_courses('course:/test::ns_test, course:/:/')
         self.old_namespace = namespace_manager.get_namespace()
@@ -605,6 +609,23 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
             'request': transforms.dumps(request),
             'file': upload}
 
+    def get_response_dict(self, response_str):
+        response_xml = cElementTree.XML(response_str)
+        response_dict = {}
+        for child in response_xml:
+            response_dict[child.tag] = child.text
+        return response_dict
+
+    def test_rest_handler_provides_upload_and_poller_url(self):
+        response = self.get('rest/xblock_archive')
+        resp_dict = transforms.loads(response.body)
+        self.assertEqual(200, resp_dict['status'])
+        payload = transforms.loads(resp_dict['payload'])
+        self.assertTrue(
+            payload['upload_url'].startswith('http://localhost/_ah/upload/'))
+        self.assertEquals(
+            '/test/rest/xblock_archive_progress', payload['poller_url'])
+
     def test_post_fails_with_bad_xsrf_token(self):
         response = self.post(
             'rest/xblock_archive', self.get_request(xsrf_token='bad_token'))
@@ -619,39 +640,45 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
 
     def test_post_fails_with_missing_attachment(self):
         response = self.post('rest/xblock_archive', self.get_request())
-        resp_dict = transforms.loads(response.body)
-        self.assertEqual(403, resp_dict['status'])
+        resp_dict = self.get_response_dict(response.body)
+        self.assertEqual('403', resp_dict['status'])
         self.assertEqual('No file specified.', resp_dict['message'])
 
     def test_post_fails_with_malformed_tar_gz_file(self):
-        response = self.post(
-            'rest/xblock_archive',
-            self.get_request(upload=webtest.Upload('filename.tar.gz', 'abc')))
-        resp_dict = transforms.loads(response.body)
-        self.assertEqual(412, resp_dict['status'])
+        blob_key = self._store_in_blobstore('abc')
+        app_context = sites.get_app_context_for_namespace('ns_test')
+        job = xblock_module.XBlockArchiveJob(app_context, blob_key=blob_key)
+        resp_dict = job.run()
+        self.assertFalse(resp_dict['success'])
         self.assertIn('Unable to read the archive file', resp_dict['message'])
 
-    def _import_archive(self, archive_name=None):
+    def _store_in_blobstore(self, data):
+        file_name = files.blobstore.create(mime_type='application/octet-stream')
+        with files.open(file_name, 'a') as f:
+            f.write(data)
+        files.finalize(file_name)
+        return files.blobstore.get_blob_key(file_name)
+
+    def _base_import_archive(self, archive_name=None, dry_run=False):
         archive_name = archive_name or 'functional_tests.tar.gz'
         archive = os.path.join(
             os.path.dirname(__file__), 'resources', archive_name)
-        response = self.post(
-            'rest/xblock_archive',
-            self.get_request(upload=webtest.Upload(archive)))
-        resp_dict = transforms.loads(response.body)
-        self.assertEqual(200, resp_dict['status'])
-        self.assertIn('Saved.', resp_dict['message'])
+        blob_key = self._store_in_blobstore(open(archive).read())
+
+        app_context = sites.get_app_context_for_namespace('ns_test')
+        job = xblock_module.XBlockArchiveJob(
+            app_context, blob_key=blob_key, dry_run=dry_run)
+        resp_dict = job.run()
+        self.assertTrue(resp_dict['success'])
+        return resp_dict
+
+    def _import_archive(self, archive_name=None):
+        resp_dict = self._base_import_archive(archive_name, dry_run=False)
+        self.assertIn('Upload successfully imported', resp_dict['message'])
         return resp_dict
 
     def _import_dry_run_archive(self, archive_name=None):
-        archive_name = archive_name or 'functional_tests.tar.gz'
-        archive = os.path.join(
-            os.path.dirname(__file__), 'resources', archive_name)
-        response = self.post(
-            'rest/xblock_archive',
-            self.get_request(upload=webtest.Upload(archive), dry_run=True))
-        resp_dict = transforms.loads(response.body)
-        self.assertEqual(412, resp_dict['status'])
+        resp_dict = self._base_import_archive(archive_name, dry_run=True)
         self.assertIn('Upload successfully validated', resp_dict['message'])
         return resp_dict
 
@@ -857,14 +884,14 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         resp_dict = self._import_dry_run_archive(
             archive_name='functional_tests_merge.tar.gz')
         expected_message = """Upload successfully validated:
+Updating file '/assets/img/static/test.png'
 Update unit title from 'Section 1' to 'Section One'
 Update lesson title from 'Subsection 1.1' to 'Subsection One point one'
 XBlock content updated in 'Subsection One point one' (974d5439622e4012bd28998efa15e02d)
 Delete lesson 'Subsection 1.2'
 Update unit title from 'Section 2' to 'Section 2'
 Create lesson 'Subsection 2.1'
-XBlock content inserted in 'Subsection 2.1' (4d005fc5b85f436cb029d8b0942b4662)
-Updating file '/assets/img/static/test.png'"""
+XBlock content inserted in 'Subsection 2.1' (4d005fc5b85f436cb029d8b0942b4662)"""
         self.assertEqual(expected_message, resp_dict['message'])
 
     def test_merge_does_not_affect_non_imported_xblocks(self):
@@ -894,8 +921,6 @@ Updating file '/assets/img/static/test.png'"""
         # Upload a vaid course archive
         resp_dict = self._import_dry_run_archive()
 
-        # Confirm response code 412 to block page redirect and success message
-        self.assertEqual(412, resp_dict['status'])
         self.assertIn('Upload successfully validated', resp_dict['message'])
 
         # Confirm that no course content was installed
@@ -1051,6 +1076,8 @@ class ImporterTestCase(TestBase):
         def extractfile(self, path):
             if path == 'root/course.xml':
                 return StringIO(self.course_xml)
+            else:
+                return StringIO('file_data')
 
     class MockCourse(object):
 
@@ -1060,6 +1087,8 @@ class ImporterTestCase(TestBase):
     class MockFileSystem(object):
         def __init__(self):
             self.last_put = None
+            self.last_filedata_list = None
+            self.wait_and_finalize_called = False
 
         def physical_to_logical(self, path):
             return path
@@ -1069,6 +1098,13 @@ class ImporterTestCase(TestBase):
 
         def put(self, path, unused_data):
             self.last_put = path
+
+        def put_multi_async(self, filedata_list):
+            self.last_filedata_list = filedata_list
+
+            def wait_and_finalize():
+                self.wait_and_finalize_called = True
+            return wait_and_finalize
 
     def setUp(self):
         super(ImporterTestCase, self).setUp()
@@ -1125,12 +1161,17 @@ class ImporterTestCase(TestBase):
         self.importer = self._new_importer()
         self.importer.parse()
         self.importer.do_import()
-        self.assertEquals('/assets/img/static/test.png', self.fs.last_put)
+        self.assertTrue(self.fs.wait_and_finalize_called)
+        fd_list = self.fs.last_filedata_list
+        self.assertEquals(1, len(fd_list))
+        self.assertEquals(2, len(fd_list[0]))
+        self.assertEquals('/assets/img/static/test.png', fd_list[0][0])
+        self.assertEquals('file_data', fd_list[0][1].read())
 
     def test_refuse_to_install_too_large_files(self):
         self.archive.members.append(self.MockArchive.MockMember(
             'root/static/test.png',
-            size=filer.MAX_ASSET_UPLOAD_SIZE_K * 1024 + 1))
+            size=xblock_module.MAX_ASSET_UPLOAD_SIZE_K * 1024 + 1))
         self.importer = self._new_importer()
         self.importer.parse()
         try:

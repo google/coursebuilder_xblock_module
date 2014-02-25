@@ -22,7 +22,6 @@ from xml.etree import cElementTree
 
 from controllers import utils
 import extensions.tags.gcb
-import jinja2
 from lxml import etree
 from modules.assessment_tags import questions
 from xblock.core import XBlock
@@ -39,6 +38,12 @@ class NavItem(object):
         self.runtime = runtime
         self.icon_class = self.choose_icon_class(block_id) or 'document'
 
+        block = self.runtime.get_block(block_id)
+        if hasattr(block, 'display_name'):
+            self.title = block.display_name
+        else:
+            self.title = ''
+
     def choose_icon_class(self, block_id):
         block = self.runtime.get_block(block_id)
         if block.has_children:
@@ -52,6 +57,7 @@ class NavItem(object):
                 return 'video'
 
 
+@XBlock.needs('jinja')
 class SequenceBlock(XBlock):
     """An XBlock which presents its children in a tabbed view.
 
@@ -68,11 +74,8 @@ class SequenceBlock(XBlock):
 
     def __init__(self, *args, **kwargs):
         super(SequenceBlock, self).__init__(*args, **kwargs)
-        self.template_env = jinja2.Environment(
-            loader=jinja2.FileSystemLoader(
-                os.path.join(os.path.dirname(__file__), 'templates')),
-            extensions=['jinja2.ext.autoescape'],
-            autoescape=True)
+        self.templates_dirs = [os.path.join(os.path.dirname(__file__), 'templates')]
+        self.get_template = self.runtime.service(self, 'jinja')
 
     def student_view(self, context=None):
         frag = Fragment()
@@ -86,7 +89,7 @@ class SequenceBlock(XBlock):
         child_frags = self.runtime.render_children(self, context)
         frag.add_frags_resources(child_frags)
 
-        template = self.template_env.get_template('sequence.html')
+        template = self.get_template('sequence.html', self.templates_dirs)
         template_values = {
             'nav_items': [
                 NavItem(child_id, self.runtime) for child_id in self.children],
@@ -103,6 +106,7 @@ class SequenceBlock(XBlock):
         return {'position': self.position}
 
 
+@XBlock.needs('jinja')
 class VerticalBlock(XBlock):
     """An XBlock which presents its children in a vertical list.
 
@@ -110,18 +114,17 @@ class VerticalBlock(XBlock):
     https://github.com/edx/edx-platform.
     """
 
+    display_name = String(default=None, scope=Scope.content)
+
     has_children = True
 
     def __init__(self, *args, **kwargs):
         super(VerticalBlock, self).__init__(*args, **kwargs)
-        self.template_env = jinja2.Environment(
-            loader=jinja2.FileSystemLoader(
-                os.path.join(os.path.dirname(__file__), 'templates')),
-            extensions=['jinja2.ext.autoescape'],
-            autoescape=True)
+        self.templates_dirs = [os.path.join(os.path.dirname(__file__), 'templates')]
+        self.get_template = self.runtime.service(self, 'jinja')
 
     def student_view(self, context=None):
-        template = self.template_env.get_template('vertical.html')
+        template = self.get_template('vertical.html', self.templates_dirs)
         child_frags = self.runtime.render_children(self, context=context)
         result = Fragment()
         result.add_frags_resources(child_frags)

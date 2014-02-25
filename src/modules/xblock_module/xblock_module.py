@@ -37,6 +37,7 @@ from xml.etree import cElementTree
 import appengine_config
 from appengine_xblock_runtime import store
 import appengine_xblock_runtime.runtime
+from common import jinja_utils
 from common import safe_dom
 from common import schema_fields
 from common import tags
@@ -49,7 +50,9 @@ from lxml import etree
 import messages
 from models import courses
 from models import custom_modules
+from models import jobs
 from models import transforms
+from models import vfs
 import models.models as m_models
 from modules.dashboard import filer
 from modules.dashboard import unit_lesson_editor
@@ -66,7 +69,9 @@ import xblock.plugin
 import xblock.runtime
 
 from google.appengine.api import users
+from google.appengine.ext import blobstore
 from google.appengine.ext import db
+from google.appengine.ext import deferred
 from google.appengine.ext import ndb
 
 
@@ -80,6 +85,9 @@ XBLOCK_LOCAL_RESOURCES_URI = '/modules/xblock_module/xblock_local_resources'
 HANDLER_URI = '/modules/xblock_module/handler'
 # URI routing the the MathJax package
 MATHJAX_URI = '/modules/xblock_module/MathJax'
+
+# Allow images of up to 5Mb
+MAX_ASSET_UPLOAD_SIZE_K = 5 * 1024
 
 # The location of the static workbench files used by the XBlocks
 WORKBENCH_STATIC_PATH = os.path.normpath('lib/XBlock/workbench/static')
@@ -170,9 +178,14 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
         else:
             field_data = xblock.field_data.ReadOnlyFieldData(field_data)
 
+        def get_jinja_template(template_name, dirs):
+            locale = handler.app_context.get_environ()['course']['locale']
+            return jinja_utils.get_template(template_name, dirs, locale=locale)
+        services = {'jinja': get_jinja_template}
+
         super(Runtime, self).__init__(
             id_reader=id_reader, field_data=field_data, student_id=student_id,
-            select=select_xblock)
+            services=services, select=select_xblock)
         self.handler = handler
 
     def render_template(self, template_name, **kwargs):
@@ -516,6 +529,8 @@ def _add_editor_to_dashboard():
         [XBlockEditorRESTHandler.URI, XBlockEditorRESTHandler])
     dashboard.DashboardHandler.child_routes.append(
         [XBlockArchiveRESTHandler.URI, XBlockArchiveRESTHandler])
+    dashboard.DashboardHandler.child_routes.append(
+        [XBlockArchiveProgressQueryHandler.URI, XBlockArchiveProgressQueryHandler])
 
 
 def _remove_editor_from_dashboard():
@@ -530,6 +545,8 @@ def _remove_editor_from_dashboard():
         [XBlockEditorRESTHandler.URI, XBlockEditorRESTHandler])
     dashboard.DashboardHandler.child_routes.remove(
         [XBlockArchiveRESTHandler.URI, XBlockArchiveRESTHandler])
+    dashboard.DashboardHandler.child_routes.remove(
+        [XBlockArchiveProgressQueryHandler.URI, XBlockArchiveProgressQueryHandler])
 
 
 def list_xblocks(the_dashboard):
@@ -598,7 +615,8 @@ def _render_editor(the_dashboard, key=None, title=None, description=None):
         delete_url=delete_url, delete_method='delete',
         required_modules=XBlockEditorRESTHandler.REQUIRED_MODULES)
     template_values = {
-        'page_title': title,
+        'page_title': the_dashboard.format_title(title),
+        'page_title_linked': the_dashboard.format_title(title, as_link=True),
         'page_description': description,
         'main_content': main_content}
     the_dashboard.render_page(template_values)
@@ -623,6 +641,7 @@ def _get_import_xblock(the_dashboard):
     exit_url = the_dashboard.canonicalize_url('/dashboard?action=assets')
     extra_js_files = []
 
+    extra_js_files.append('resources/import.js')
     if courses.Course(the_dashboard).get_units():
         extra_js_files.append('resources/merge.js')
 
@@ -632,10 +651,11 @@ def _get_import_xblock(the_dashboard):
         XBlockArchiveRESTHandler.SCHEMA.get_schema_dict(),
         None, rest_url, exit_url,
         delete_url=None,
-        auto_return=True,
+        auto_return=False,
         save_method='upload',
         save_button_caption='Import',
         required_modules=XBlockArchiveRESTHandler.REQUIRED_MODULES,
+        extra_css_files=['resources/import.css'],
         extra_js_files=extra_js_files)
     template_values = {
         'page_title': messages.IMPORT_COURSE_PAGE_TITLE,
@@ -784,11 +804,16 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
         """Provide empty inital content for import editor."""
         transforms.send_json_response(
             self, 200, 'Success',
-            payload_dict={'file': ''},
+            payload_dict={
+                'file': '',
+                'upload_url': blobstore.create_upload_url(
+                    self.canonicalize_url(self.URI)),
+                'poller_url': self.canonicalize_url(
+                    XBlockArchiveProgressQueryHandler.URI)
+            },
             xsrf_token=utils.XsrfTokenManager.create_xsrf_token(
                 self.XSRF_TOKEN))
 
-    @ndb.toplevel
     def post(self):
         assert courses.is_editable_fs(self.app_context)
 
@@ -800,7 +825,7 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
         if (not unit_lesson_editor.CourseOutlineRights.can_edit(self) or
             not filer.FilesRights.can_add(self)):
 
-            transforms.send_json_file_upload_response(
+            transforms.send_file_upload_response(
                 self, 401, 'Access denied.')
             return
 
@@ -809,7 +834,7 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
                 transforms.loads(request.get('payload')),
                 self.SCHEMA.get_json_schema_dict())
         except ValueError as err:
-            transforms.send_json_file_upload_response(self, 412, str(err))
+            transforms.send_file_upload_response(self, 412, str(err))
             return
 
         dry_run = payload.get('dry_run', False)
@@ -817,52 +842,96 @@ class XBlockArchiveRESTHandler(utils.BaseRESTHandler):
         upload = self.request.POST['file']
 
         if not isinstance(upload, cgi.FieldStorage):
-            transforms.send_json_file_upload_response(
+            transforms.send_file_upload_response(
                 self, 403, 'No file specified.')
             return
 
+        blob_key = blobstore.parse_blob_info(upload).key()
+        XBlockArchiveJob(
+            self.app_context, blob_key=blob_key, dry_run=dry_run).submit()
+
+        # Pass a new upload url back to the page for future uploads
+        new_upload_url = blobstore.create_upload_url(
+            self.canonicalize_url(self.URI))
+
+        transforms.send_file_upload_response(
+            self, 200, 'Processing upload...',
+            payload_dict={'new_upload_url': new_upload_url})
+
+
+class XBlockArchiveJob(jobs.DurableJob):
+    """The offline job which handles installing an uploaded archive file."""
+
+    def __init__(self, app_context, blob_key=None, dry_run=True):
+        super(XBlockArchiveJob, self).__init__(app_context)
+        self.app_context = app_context
+        self.blob_key = blob_key
+        self.dry_run = dry_run
+
+    @ndb.toplevel
+    def run(self):
+        def status(success_flag, message):
+            return {
+                'success': success_flag,
+                'message': message}
+
+        blob_info = blobstore.BlobInfo.get(self.blob_key)
         try:
-            archive = tarfile.open(fileobj=upload.file, mode='r:gz')
+            fileobj = blobstore.BlobReader(
+                self.blob_key, buffer_size=1024 * 1024)
+            archive = tarfile.open(fileobj=fileobj, mode='r:gz')
         except Exception as e:  # pylint: disable=broad-except
-            transforms.send_json_file_upload_response(
-                self, 412, 'Unable to read the archive file: %s' % e)
-            return
+            return status(False, 'Unable to read the archive file: %s' % e)
 
         try:
-            course = courses.Course(self)
+            course = courses.Course(None, app_context=self.app_context)
             rt = Runtime(self, is_admin=True)
             journal = []
             importer = Importer(
                 archive=archive, course=course, fs=self.app_context.fs.impl,
-                rt=rt, dry_run=dry_run, journal=journal)
+                rt=rt, dry_run=self.dry_run, journal=journal)
             importer.parse()
 
             validation_errors = importer.validate()
             if validation_errors:
-                transforms.send_json_file_upload_response(
-                    self, 412,
-                    'Import failed: %s' % '\n'.join(validation_errors))
-                return
+                return status(
+                    False, 'Import failed: %s' % '\n'.join(validation_errors))
 
             importer.do_import()
 
-            if dry_run:
-                transforms.send_json_file_upload_response(
-                    self, 412, # Status 412 needed to prevent page auto-return
+            if self.dry_run:
+                return status(
+                    True,
                     'Upload successfully validated:\n%s' % '\n'.join(journal))
-                return
 
             course.save()
 
         except Exception as e:  # pylint: disable=broad-except
             logging.exception('Import failed')
-            transforms.send_json_file_upload_response(
-                self, 412, 'Import failed: %s' % e)
-            return
+            return status(False, 'Import failed: %s' % e)
         finally:
             archive.close()
 
-        transforms.send_json_file_upload_response(self, 200, 'Saved.')
+        return status(
+            True, 'Upload successfully imported:\n%s' % '\n'.join(journal))
+
+
+class XBlockArchiveProgressQueryHandler(utils.BaseRESTHandler):
+    """A handler to respond to Ajax polling on the progress of the import."""
+
+    URI = '/rest/xblock_archive_progress'
+
+    def get(self):
+        job = XBlockArchiveJob(self.app_context)
+        if job.is_active():
+            payload_dict = {'complete': False}
+        else:
+            payload_dict = {
+                'complete': True,
+                'output': job.load().output}
+
+        transforms.send_json_response(
+            self, 200, 'Polling', payload_dict=payload_dict)
 
 
 class BadImportException(Exception):
@@ -1070,6 +1139,8 @@ class Importer(object):
 
     def do_import(self):
         """Perform the import and create resources in CB."""
+        finalize_writes_callback = self._import_static_files()
+
         if not self.dry_run:
             self._delete_all_imported_root_usage_dtos()
 
@@ -1104,7 +1175,8 @@ class Importer(object):
             self.journal.append('Delete unit \'%s\'' % unit.title)
             self.course.delete_unit(unit)
 
-        self._load_static_files()
+        # Wait for async db operations to complete
+        finalize_writes_callback()
 
     def _get_base_folder_name(self):
         for member in self.archive.getmembers():
@@ -1129,8 +1201,8 @@ class Importer(object):
                 target_path = '%s/html/%s.html' % (
                     self.base, node.attrib['filename'])
                 target_file = self.archive.extractfile(target_path)
-                node.append(
-                    tags.html_string_to_element_tree(target_file.read()))
+                node.append(tags.html_string_to_element_tree(
+                    target_file.read().decode('utf8')))
                 del node.attrib['filename']
             self._rebase_html_refs(node)
             return node
@@ -1149,13 +1221,16 @@ class Importer(object):
         for child in node:
             self._rebase_html_refs(child)
 
-    def _load_static_files(self):
+    def _import_static_files(self):
+        filedata_list = []
         for member in self.archive.getmembers():
             if member.isfile() and member.name.startswith(
                     '%s/static/' % self.base):
-                self._insert_file(member)
+                self._insert_filedata(filedata_list, member)
 
-    def _insert_file(self, member):
+        return self.fs.put_multi_async(filedata_list)
+
+    def _insert_filedata(self, filedata_list, member):
         """Extract the tarfile member into /assets/img/static."""
         ph_path = '/assets/img/%s' % member.name[len(self.base) + 1:]
         path = self.fs.physical_to_logical(ph_path)
@@ -1165,15 +1240,15 @@ class Importer(object):
         else:
             self.journal.append('Inserting file \'%s\'' % ph_path)
 
-        if member.size > filer.MAX_ASSET_UPLOAD_SIZE_K * 1024:
+        if member.size > MAX_ASSET_UPLOAD_SIZE_K * 1024:
             raise BadImportException(
                 'Cannot upload files bigger than %s K' %
-                filer.MAX_ASSET_UPLOAD_SIZE_K)
+                MAX_ASSET_UPLOAD_SIZE_K)
 
         if self.dry_run:
             return
 
-        self.fs.put(path, self.archive.extractfile(member))
+        filedata_list.append((path, self.archive.extractfile(member)))
 
 
 # XBlock component tag section

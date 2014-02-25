@@ -1,17 +1,22 @@
 <div class="sequence_block" data-position="{{position}}">
-  <ul class="sequence_nav">
+  <ul class="sequence_nav" role="tablist">
     <li class="prev"><a href="javascript:void(0)"></a></li>
     {% for nav_item in nav_items %}
-      <li class="nav_button {{nav_item.icon_class}}">
-        <a data-index="{{loop.index0}}" href="javascript:void(0)"></a>
+      <li class="nav_button {{nav_item.icon_class}}" role="tab" id="tab{{loop.index0}}">
+        <a data-index="{{loop.index0}}" href="javascript:void(0)" title="{{nav_item.title}}"></a>
       </li>
     {% endfor %}
     <li class="next"><a href="javascript:void(0)"></a></li>
   </ul>
   
-  <div class="content">
+  <div class="content" role="tabpanel" aria-labeledby="tab{{loop.index0}}">
     {% for child in children %}
-      <div class="hidden">{{ child.body_html() | safe }}</div>
+      <div class="hidden" aria-live="polite">{{ child.body_html() | safe }}</div>
     {% endfor %}
+  </div>
+  <div class="button-labels" style="display:none" aria-hidden="true">
+    <span class="prev">{{ gettext('Previous Page') }}</span>
+    <span class="next">{{ gettext('Next Page') }}</span>
+    <span class="end">{{ gettext('End') }}</span>
   </div>
 </div>

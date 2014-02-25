@@ -172,16 +172,49 @@ class CourseBuilderXBlockTests(test_classes.BaseIntegrationTest):
         self.driver.find_element_by_name('file').send_keys(archive_file)
         self.driver.find_element_by_link_text('Import').click()
 
-        wait.WebDriverWait(self.driver, 15).until(
-            lambda d: d.current_url.endswith('/dashboard?action=assets'))
+        def upload_successfully_imported(d):
+            msg_div = d.find_element_by_css_selector(
+                '#formContainer > div.cb-oeditor-xblock-import-msg')
+            return msg_div and msg_div.text.startswith(
+                'Upload successfully imported:')
+        wait.WebDriverWait(self.driver, 15).until(upload_successfully_imported)
 
     def load_unit(self, course_name, unit_number):
         self.driver.get('%s/%s/unit?unit=%s' % (
             self.INTEGRATION_SERVER_BASE_URL, course_name, unit_number))
 
+    def load_lesson(self, course_name, unit_number, lesson_number):
+        self.driver.get('%s/%s/unit?unit=%s&lesson=%s' % (
+            self.INTEGRATION_SERVER_BASE_URL,
+            course_name, unit_number, lesson_number))
+
     def get_sequence_block(self):
         return Sequence(self.driver.find_element_by_css_selector(
             'div.gcb-lesson-content > div > div > div.xblock'))
+
+    def click_cb_prev(self):
+        self.driver.find_element_by_css_selector(
+            'div.gcb-prev-button > a').click()
+
+    def click_cb_next(self):
+        self.driver.find_element_by_css_selector(
+            'div.gcb-next-button > a').click()
+
+    def assert_lesson_title(self, title):
+        assert self.driver.find_element_by_css_selector(
+            '.gcb-lesson-title').text.startswith(title)
+
+    def assert_prev_button_visible(self, is_visible=True):
+        display = self.driver.find_element_by_css_selector(
+            'div.gcb-prev-button > a').value_of_css_property('display')
+        if is_visible:
+            assert display == 'block'
+        else:
+            assert display == 'none'
+
+    def assert_next_button_label(self, label):
+        self.assertEqual(label, self.driver.find_element_by_css_selector(
+            'div.gcb-next-button > a').text)
 
     def test_sequence_block(self):
         course_name, unused_title = self.create_new_course()
@@ -205,6 +238,56 @@ class CourseBuilderXBlockTests(test_classes.BaseIntegrationTest):
 
         # Test forward arrow
         sequence.click_next()
+        sequence.assert_selected(1)
+
+        # Test multi-page nav with CB arrow buttons. Confirm that can move
+        # between the tabs of a sequence and also between pages using the page
+        # nav buttons.
+
+        # Start on the first tab of the unit
+        sequence.click_item(0)
+
+        sequence.assert_selected(0)
+        self.assert_prev_button_visible(is_visible=False)
+        self.assert_next_button_label('Next Page')
+        self.click_cb_next()
+
+        sequence.assert_selected(1)
+        self.assert_prev_button_visible()
+        self.assert_next_button_label('Next Page')
+        self.click_cb_next()
+
+        sequence = self.get_sequence_block()
+        sequence.assert_selected(0)
+        self.assert_lesson_title('Subsection 1.2')
+        self.assert_prev_button_visible()
+        self.assert_next_button_label('End')
+        self.click_cb_prev()
+
+        sequence = self.get_sequence_block()
+        sequence.assert_selected(1)
+        self.assert_lesson_title('Subsection 1.1')
+        self.assert_next_button_label('Next Page')
+        self.assert_prev_button_visible()
+        self.click_cb_prev()
+
+        sequence.assert_selected(0)
+        self.assert_prev_button_visible(is_visible=False)
+
+        # Test that navigation with the CB arrow buttons correctly pages back
+        # to the last tab of the previous page - even if the state of that
+        # sequence has been set to some other value
+
+        # Select the first tab of Subsection 1.1
+        self.load_unit(course_name, 1)
+        sequence = self.get_sequence_block()
+        sequence.click_item(0)
+        sequence.assert_selected(0)
+        # Jump to Subsection 1.2
+        self.load_lesson(course_name, 1, 3)
+        # Page back and confirm that the second item of Subsection 1.1 selected
+        self.click_cb_prev()
+        sequence = self.get_sequence_block()
         sequence.assert_selected(1)
 
     def test_capa_problem_block(self):

@@ -63,3 +63,20 @@ ul.sequence_nav > li.next > a:hover {
 div.sequence_block > div.hidden {
   display: none;
 }
+ul.sequence_nav > li.nav_button {
+  position: relative;
+}
+ul.sequence_nav > li > a[title]:hover:after {
+  content: attr(title);
+  position: absolute;
+  left: 0;
+  top: 44px;
+  white-space: nowrap;
+  margin-top: 5px;
+  border-radius: 5px;
+  padding: 1em 1em;
+  background-color: black;
+  opacity: 0.8;
+  color: white;
+  font-size: 125%;
+}
