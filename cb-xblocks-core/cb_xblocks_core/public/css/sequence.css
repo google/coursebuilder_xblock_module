@@ -60,7 +60,7 @@ ul.sequence_nav > li.prev > a:hover,
 ul.sequence_nav > li.next > a:hover {
   opacity: 0.6;
 }
-div.sequence_block > div.hidden {
+div.sequence_block > div.content > div.hidden {
   display: none;
 }
 ul.sequence_nav > li.nav_button {
