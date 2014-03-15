@@ -85,6 +85,8 @@ function SequenceBlock(runtime, element) {
 
     $("div.gcb-prev-button > a").click(function() {
       if (position > 0) {
+        // Since the buttons are at the bottom of the page, scroll to top
+        $("body").scrollTop(0);
         display(--position);
       } else {
         window.location = gcbPrevButtonUri + GCB_NAV_PREV_HASH;
@@ -93,6 +95,8 @@ function SequenceBlock(runtime, element) {
 
     $("div.gcb-next-button > a").click(function() {
       if (position < lastTabIndex) {
+        // Since the buttons are at the bottom of the page, scroll to top
+        $("body").scrollTop(0);
         display(++position);
       } else {
         window.location = gcbNextButtonUri + GCB_NAV_NEXT_HASH;
