@@ -29,6 +29,7 @@ from models import transforms
 from modules.xblock_module.xblock_module import MATHJAX_URI
 import webob
 import xblock.core
+from xblock.fields import Scope
 import xblock.fragment
 import xblock.runtime
 from xmodule import progress
@@ -203,7 +204,11 @@ class ProblemBlock(xblock.core.XBlock, xmodule.capa_base.CapaMixin):
         for field_name, field in self.fields.items():
             if field_name in ('children', 'parent', 'content', 'data'):
                 continue
-            if field.is_set_on(self):
+            # TODO(jorr): Restore export of user state fields once roundtripping
+            # fields of type Dict through XML is fixed. Currently this is broken
+            # in XBlock, and so as a work-around ommit all the user_state fields
+            # because these happen to be the only ones which are Dicts.
+            if field.is_set_on(self) and field.scope is not Scope.user_state:
                 node.set(field_name, unicode(field.read_from(self)))
 
         for child in etree.fromstring(self.data):
