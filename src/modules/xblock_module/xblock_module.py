@@ -512,7 +512,8 @@ _orig_get_template = dashboard.DashboardHandler.get_template
 
 def _get_template(the_dashboard, template_name, dirs):
     return _orig_get_template(
-        the_dashboard, template_name, dirs + [os.path.dirname(__file__)])
+        the_dashboard, template_name, dirs + [os.path.join(
+            appengine_config.BUNDLE_ROOT, 'modules', 'xblock_module')])
 
 
 def _add_editor_to_dashboard():
