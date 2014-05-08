@@ -28,11 +28,10 @@ from controllers import utils
 import html5lib
 from models import courses
 from models import transforms
-from modules.dashboard import filer
+import models.models as m_models
 from modules.xblock_module import dbmodels
 from modules.xblock_module import xblock_module
 from tools.etl import etl
-import webtest
 import xblock
 from xblock import fragment
 
@@ -41,7 +40,7 @@ from tests.functional import test_classes
 
 from google.appengine.api import files
 from google.appengine.api import namespace_manager
-from google.appengine.ext import blobstore
+from google.appengine.api import users
 from google.appengine.ext import ndb
 
 THUMBS_ENTRY_POINT = 'thumbs = thumbs:ThumbsBlock'
@@ -68,11 +67,13 @@ def parse_xml_string(rt, xml_str, dry_run=False):
 
 
 class MockHandler(object):
+
     def canonicalize_url(self, location):
         return '/new_course' + location
 
 
 class TestBase(actions.TestBase):
+
     def setUp(self):
         super(TestBase, self).setUp()
         # Whitelist the thumbs block for testing
@@ -82,7 +83,7 @@ class TestBase(actions.TestBase):
     def tearDown(self):
         if THUMBS_ENTRY_POINT in xblock_module.XBLOCK_WHITELIST:
             xblock_module.XBLOCK_WHITELIST.remove(THUMBS_ENTRY_POINT)
-            xblock.core.XBlock._plugin_cache = None   # pylint: disable=protected-access
+            xblock.core.XBlock._plugin_cache = None  # pylint: disable=protected-access
         super(TestBase, self).tearDown()
 
 
@@ -152,13 +153,13 @@ class DataMigrationTests(TestBase):
         # Download course data from Course A with ETL
         archive_path = os.path.join(self.test_tempdir, 'archive.zip')
         args = etl.PARSER.parse_args([
-            etl._MODE_DOWNLOAD, etl._TYPE_COURSE, # pylint: disable=protected-access
+            etl._MODE_DOWNLOAD, etl._TYPE_COURSE,  # pylint: disable=protected-access
             '--archive_path', archive_path, '/a', 'mycourse', 'localhost:8080'])
         etl.main(args, environment_class=test_classes.FakeEnvironment)
 
         # Upload the archive zip file into Course B with ETL
         args = etl.PARSER.parse_args([
-            etl._MODE_UPLOAD, etl._TYPE_COURSE, #  pylint: disable=protected-access
+            etl._MODE_UPLOAD, etl._TYPE_COURSE,  #  pylint: disable=protected-access
             '--archive_path', archive_path, '/b', 'mycourse', 'localhost:8080'])
         etl.main(args, environment_class=test_classes.FakeEnvironment)
 
@@ -330,19 +331,148 @@ class XBlockActionHandlerTestCase(TestBase):
             expect_errors=True)
         self.assertEqual(400, response.status_int)
 
-    def test_post_without_user_rejected(self):
-        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
-        usage_id = parse_xml_string(rt, '<thumbs/>')
 
+class GuestUserTestCase(TestBase):
+    """Functional tests for the handling of logged-in and guest users."""
+
+    def setUp(self):
+        super(GuestUserTestCase, self).setUp()
+
+        actions.login('user@example.com', is_admin=True)
+
+        # Create a course in namespace "test"
+        sites.setup_courses('course:/test::ns_test, course:/:/')
+        self.old_namespace = namespace_manager.get_namespace()
+        namespace_manager.set_namespace('ns_test')
+        actions.login('admin@example.com', is_admin=True)
+
+        # Add an xblock containing a seqeunce of html blocks
+        rt = xblock_module.Runtime(MockHandler(), is_admin=True)
+        self.usage_id = parse_xml_string(
+            rt, '<sequential><html>1</html><html>2</html></sequential>')
+        data = {'description': 'an xblock', 'usage_id': self.usage_id}
+        root_usage = xblock_module.RootUsageDto(None, data)
+        root_usage_id = xblock_module.RootUsageDao.save(root_usage)
+
+        # Add a unit and a lesson to the course
+        app_context = sites.get_all_courses()[0]
+        self.course = courses.Course(None, app_context=app_context)
+        self.unit = self.course.add_unit()
+        self.unit.now_available = True
+        self.lesson = self.course.add_lesson(self.unit)
+
+        # The lesson displays the xblock
+        self.lesson.now_available = True
+        self.lesson.objectives = '<xblock root_id="%s"/>' % root_usage_id
+
+        # Make the course available.
+        self.get_environ_old = sites.ApplicationContext.get_environ
+
+        def get_environ_new(cxt):
+            environ = self.get_environ_old(cxt)
+            environ['course']['now_available'] = True
+            return environ
+
+        sites.ApplicationContext.get_environ = get_environ_new
+
+        self.course.save()
+
+        # Ensure the user is logged out
+        actions.logout()
+
+    def tearDown(self):
+        namespace_manager.set_namespace(self.old_namespace)
+        sites.ApplicationContext.get_environ = self.get_environ_old
+        super(GuestUserTestCase, self).tearDown()
+
+    def _get_xblock_in_lesson(self):
+        lesson_uri = '/test/unit?unit=%s&lesson=%s' % (
+            self.unit.unit_id, self.lesson.lesson_id)
+        response = self.get(lesson_uri)
+        root = parse_html_string(response.body)
+        sequence_elt = root.find(
+            './/*[@class="gcb-lesson-content"]/div/div/div[@class="xblock"]')
+        self.assertEqual('sequential', sequence_elt.attrib['data-block-type'])
+        self.assertEqual(self.usage_id, sequence_elt.attrib['data-usage'])
+        return sequence_elt
+
+    def _post_tab_position(self, xsrf_token, position):
         params = {
-            'usage': usage_id,
-            'handler': 'vote',
-            'xsrf_token': 'bad_token'}
+            'usage': self.usage_id,
+            'handler': 'on_select',
+            'xsrf_token': xsrf_token}
         response = self.testapp.post(
-            '%s?%s' % (xblock_module.HANDLER_URI, urllib.urlencode(params)),
-            '{"vote_type":"up"}', {},
-            expect_errors=True)
-        self.assertEqual(403, response.status_int)
+            '/test%s?%s' % (
+                xblock_module.HANDLER_URI, urllib.urlencode(params)),
+            '{"position":%s}' % position, {})
+        self.assertEqual('{"position": %s}' % position, response.body)
+
+    def _extract_position(self, sequence_elt):
+        return int(sequence_elt.find(
+            './div[@class="sequence_block"]').attrib['data-position'])
+
+    def test_guest_user(self):
+        self.assertIsNone(users.get_current_user())
+
+        # The guest user can view the page
+        sequence_elt = self._get_xblock_in_lesson()
+        xsrf_token = sequence_elt.attrib['data-xsrf-token']
+        self.assertEqual(0, self._extract_position(sequence_elt))
+
+        # The response has a coookie with a temporary user id
+        session_cookie = self.testapp.cookies['cb-guest-session']
+        self.assertRegexpMatches(session_cookie, r'^[0-9a-f]{32}$')
+
+        # Click on the second tab
+        self._post_tab_position(xsrf_token, 1)
+
+        # Cookie hasn't changed
+        self.assertEqual(
+            session_cookie, self.testapp.cookies['cb-guest-session'])
+
+        # Reload the page, and expect that the selected tab will have changed
+        sequence_elt = self._get_xblock_in_lesson()
+        self.assertEqual(1, self._extract_position(sequence_elt))
+
+        # There was an event recorded
+        student_id = 'guest-%s' % session_cookie
+        event = m_models.EventEntity.all().fetch(1)[0]
+        self.assertEqual(student_id, event.user_id)
+
+        # The state is stored under temp student_id
+        rt = xblock_module.Runtime(MockHandler(), student_id=student_id)
+        self.assertEqual(1, rt.get_block(self.usage_id).position)
+
+    def test_logged_in_user(self):
+        actions.login('user@example.com')
+        student_id = users.get_current_user().user_id()
+        self.assertIsNotNone(student_id)
+
+        # The user can view the page
+        sequence_elt = self._get_xblock_in_lesson()
+        xsrf_token = sequence_elt.attrib['data-xsrf-token']
+        self.assertEqual(0, self._extract_position(sequence_elt))
+
+        # The response has no session cookie
+        self.assertNotIn('cb-guest-session', self.testapp.cookies)
+
+        # Click on the second tab
+        self._post_tab_position(xsrf_token, 1)
+
+        # Still no session cookie
+        self.assertNotIn('cb-guest-session', self.testapp.cookies)
+
+        # Reload the page, and expect that the selected tab will have changed
+        sequence_elt = self._get_xblock_in_lesson()
+        self.assertEqual(1, self._extract_position(sequence_elt))
+
+        # There was an event recorded
+        event = m_models.EventEntity.all().fetch(1)[0]
+        self.assertEqual(student_id, event.user_id)
+
+        # The state is stored under student_id
+        rt = xblock_module.Runtime(MockHandler(), student_id=student_id)
+        self.assertEqual(1, rt.get_block(self.usage_id).position)
 
 
 class RootUsageTestCase(TestBase):
@@ -801,7 +931,7 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         # Confirm the unit structure; Unit 1 has changed names
         self.assertEqual(2, len(units))
         unit1, unit2 = units
-        self.assertEqual('Section One', unit1.title) # changed
+        self.assertEqual('Section One', unit1.title)  # changed
         self.assertEqual('Section 2', unit2.title)
         self.assertEqual(
             '688fe994cb234bf48eb96c84aea018b5',
@@ -820,10 +950,10 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
 
         lesson = unit1_lessons[0]
 
-        self.assertEqual('Subsection One point one', lesson.title) # changed
+        self.assertEqual('Subsection One point one', lesson.title)  # changed
         root_usage = self._get_root_usage(lesson.objectives)
         self.assertEqual(
-            'Unit 1, Lesson 1: Subsection One point one', # changed
+            'Unit 1, Lesson 1: Subsection One point one',  # changed
             root_usage.description)
 
         # The lesson has a sequence of two verticals
@@ -841,7 +971,7 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
         self.assertEqual(1, len(child.children))
         grandchild = rt.get_block(child.children[0])
         self.assertEqual('html', grandchild.xml_element_name())
-        self.assertIn('Some modified text', grandchild.content) # changed
+        self.assertIn('Some modified text', grandchild.content)  # changed
 
         # The second vertical has two components
         child = rt.get_block(block.children[1])
@@ -861,7 +991,7 @@ class XBlockArchiveRESTHandlerTestCase(TestBase):
 
         lesson = unit2_lessons[0]
 
-        self.assertEqual('Subsection 2.1', lesson.title) # changed
+        self.assertEqual('Subsection 2.1', lesson.title)  # changed
         root_usage = self._get_root_usage(lesson.objectives)
         self.assertEqual(
             'Unit 2, Lesson 1: Subsection 2.1', root_usage.description)

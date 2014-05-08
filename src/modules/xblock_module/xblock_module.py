@@ -30,8 +30,10 @@ from cStringIO import StringIO
 import logging
 import mimetypes
 import os
+import re
 import tarfile
 import urllib
+import uuid
 from xml.etree import cElementTree
 
 import appengine_config
@@ -52,7 +54,6 @@ from models import courses
 from models import custom_modules
 from models import jobs
 from models import transforms
-from models import vfs
 import models.models as m_models
 from modules.dashboard import filer
 from modules.dashboard import unit_lesson_editor
@@ -68,10 +69,8 @@ import xblock.fragment
 import xblock.plugin
 import xblock.runtime
 
-from google.appengine.api import users
 from google.appengine.ext import blobstore
 from google.appengine.ext import db
-from google.appengine.ext import deferred
 from google.appengine.ext import ndb
 
 
@@ -326,15 +325,18 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             XBLOCK_LOCAL_RESOURCES_URI, block.scope_ids.block_type, uri)
 
     def publish(self, block, event):
+        if self.user_id is None:
+            return
+
         wrapper = {
             'usage': block.scope_ids.usage_id,
             'type': block.scope_ids.block_type,
             'event': event}
 
-        m_models.EventEntity.record(
-            'xblock-event',
-            users.get_current_user(),
-            transforms.dumps(wrapper))
+        m_models.EventEntity(
+            source='xblock-event',
+            user_id=self.user_id,
+            data=transforms.dumps(wrapper)).put()
 
     def parse_xml_string(
             self, xml_str, unused_id_generator, orig_xml_str=None,
@@ -424,10 +426,10 @@ class XBlockActionHandler(utils.BaseHandler):
             return urllib.unquote(
                 body[:-1]) if body and body[-1] == '=' else body
 
-        if self.get_user() is None:
-            self.error(403)
-            return
-        student_id = self.get_user().user_id()
+        if self.get_user() is not None:
+            student_id = self.get_user().user_id()
+        else:
+            student_id = get_session_id_for_guest_user(self)
 
         token = self.request.get('xsrf_token')
         if not utils.XsrfTokenManager.is_xsrf_token_valid(
@@ -1255,6 +1257,25 @@ class Importer(object):
 # XBlock component tag section
 
 
+GUEST_USER_SESSION_COOKIE = 'cb-guest-session'
+GUEST_USER_SESSION_COOKIE_MAX_AGE_SEC = 48 * 60 * 60  # 48 hours
+
+
+def get_session_id_for_guest_user(handler):
+    session_cookie = handler.request.cookies.get(
+        GUEST_USER_SESSION_COOKIE, '')
+
+    # If the session cookie is missing or invalid, generate a new one
+    if not re.match('^[0-9a-f]{32}$', session_cookie):
+        session_cookie = uuid.uuid4().hex
+
+    handler.response.set_cookie(
+        GUEST_USER_SESSION_COOKIE, session_cookie,
+        max_age=GUEST_USER_SESSION_COOKIE_MAX_AGE_SEC)
+
+    return 'guest-%s' % session_cookie
+
+
 class XBlockTag(tags.ContextAwareTag):
     binding_name = 'xblock'
 
@@ -1288,7 +1309,12 @@ class XBlockTag(tags.ContextAwareTag):
     def render(self, node, context):
         root_id = node.attrib.get('root_id')
         usage_id = RootUsageDao.load(root_id).usage_id
-        student_id = context.handler.get_user().user_id()
+
+        if context.handler.get_user() is not None:
+            student_id = context.handler.get_user().user_id()
+        else:
+            student_id = get_session_id_for_guest_user(context.handler)
+
         runtime = Runtime(context.handler, student_id=student_id)
         block = runtime.get_block(usage_id)
         fragment = runtime.render(block, 'student_view')
