@@ -41,6 +41,7 @@ from tests.functional import test_classes
 from google.appengine.api import files
 from google.appengine.api import namespace_manager
 from google.appengine.api import users
+from google.appengine.ext import db
 from google.appengine.ext import ndb
 
 THUMBS_ENTRY_POINT = 'thumbs = thumbs:ThumbsBlock'
@@ -170,6 +171,82 @@ class DataMigrationTests(TestBase):
         block = rt.get_block(root_usage.usage_id)
         self.assertEqual('html', block.xml_element_name())
         self.assertEqual('Text', block.content)
+
+
+class DataSanitizationTests(TestBase):
+    """ Tests that ETL's data sanitization methods are implemented correctly."""
+
+    def get_key(self, scope, user_id, block_scope_id, field_name):
+        xblock_key = xblock.runtime.KeyValueStore.Key(
+            scope=scope,
+            user_id=user_id,
+            block_scope_id=block_scope_id,
+            field_name=field_name)
+        key_str = xblock_module.store.key_string(xblock_key)
+        db_key = db.Key.from_path('KeyValueEntity', key_str)
+        return db_key
+
+    def transform(self, x):
+        return 'tr_' + x
+
+    def test_safe_key_transforms_keys_with_user_id(self):
+        orig_key = self.get_key(
+            xblock.fields.Scope.user_state, '1234567890',
+            '0d40c9be8e254416b4782bf8e19a538f', 'my_field')
+        safe_key = dbmodels.KeyValueEntity.safe_key(orig_key, self.transform)
+        self.assertEquals(
+            'usage.0d40c9be8e254416b4782bf8e19a538f.tr_1234567890.my_field',
+            safe_key.name())
+
+    def test_safe_key_does_not_transform_keys_without_user_id(self):
+        orig_key = self.get_key(
+            xblock.fields.Scope.content, None,
+            '0d40c9be8e254416b4782bf8e19a538f', 'my_field')
+        safe_key = dbmodels.KeyValueEntity.safe_key(orig_key, self.transform)
+        self.assertEquals(
+            'definition.0d40c9be8e254416b4782bf8e19a538f.my_field',
+            safe_key.name())
+
+    def test_safe_key_rejects_malformed_keys(self):
+        # Key is not an xblock key
+        bad_key = db.Key.from_path('KeyValueEntity', 'totally_bad_key')
+        with self.assertRaises(Exception):
+            safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
+
+        # Key has too few components
+        bad_key = db.Key.from_path(
+            'KeyValueEntity',
+            'usage.0d40c9be8e254416b4782bf8e19a538f')
+        with self.assertRaises(Exception):
+            safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
+
+        # Key has too many components
+        bad_key = db.Key.from_path(
+            'KeyValueEntity',
+            'usage.0d40c9be8e254416b4782bf8e19a538f.1234567890.my_field.goes_on')
+        with self.assertRaises(Exception):
+            safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
+
+        # Key has unrecognized first component
+        bad_key = db.Key.from_path(
+            'KeyValueEntity',
+            'unrecognized.0d40c9be8e254416b4782bf8e19a538f.1234567890.my_field')
+        with self.assertRaises(Exception):
+            safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
+
+        # Key has unrecognized second component (not a hex string)
+        bad_key = db.Key.from_path(
+            'KeyValueEntity',
+            'usage.not_hex_string.1234567890.my_field')
+        with self.assertRaises(Exception):
+            safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
+
+        # Key has unrecognized second component (hex string, but not 32 chars)
+        bad_key = db.Key.from_path(
+            'KeyValueEntity',
+            'usage.0123456789abcdef0123456789abcde.1234567890.my_field')
+        with self.assertRaises(Exception):
+            safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
 
 
 class RuntimeTestCase(TestBase):

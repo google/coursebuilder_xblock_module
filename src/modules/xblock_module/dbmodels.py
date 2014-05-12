@@ -16,6 +16,8 @@
 
 __author__ = 'John Orr (jorr@google.com)'
 
+import re
+
 from models import entities
 from google.appengine.ext import db
 
@@ -29,4 +31,22 @@ class UsageEntity(entities.BaseEntity):
 
 
 class KeyValueEntity(entities.BaseEntity):
+    _BLOCK_ID_RE = re.compile('^[0-9a-zA-Z]{32}$')
+
     data = db.TextProperty(indexed=False)
+
+    @classmethod
+    def safe_key(cls, db_key, transform_fn):
+        """Creates a copy of db_key that is safe for export."""
+
+        key_list = db_key.name().split('.')
+
+        assert len(key_list) in {3, 4}
+        assert key_list[0] in {
+            'children', 'parent', 'usage', 'definition', 'type', 'all'}
+        assert cls._BLOCK_ID_RE.match(key_list[1])
+
+        if len(key_list) == 4:
+            key_list[2] = transform_fn(key_list[2])
+
+        return db.Key.from_path(cls.kind(), '.'.join(key_list))
