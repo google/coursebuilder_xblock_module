@@ -173,7 +173,7 @@ class DataMigrationTests(TestBase):
         self.assertEqual('Text', block.content)
 
 
-class DataSanitizationTests(TestBase):
+class KeyValueEntitySanitizationTests(TestBase):
     """ Tests that ETL's data sanitization methods are implemented correctly."""
 
     def get_key(self, scope, user_id, block_scope_id, field_name):
@@ -210,43 +210,114 @@ class DataSanitizationTests(TestBase):
     def test_safe_key_rejects_malformed_keys(self):
         # Key is not an xblock key
         bad_key = db.Key.from_path('KeyValueEntity', 'totally_bad_key')
-        with self.assertRaises(Exception):
+        with self.assertRaises(AssertionError):
             safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
 
         # Key has too few components
         bad_key = db.Key.from_path(
             'KeyValueEntity',
             'usage.0d40c9be8e254416b4782bf8e19a538f')
-        with self.assertRaises(Exception):
+        with self.assertRaises(AssertionError):
             safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
 
         # Key has too many components
         bad_key = db.Key.from_path(
             'KeyValueEntity',
             'usage.0d40c9be8e254416b4782bf8e19a538f.1234567890.my_field.goes_on')
-        with self.assertRaises(Exception):
+        with self.assertRaises(AssertionError):
             safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
 
         # Key has unrecognized first component
         bad_key = db.Key.from_path(
             'KeyValueEntity',
             'unrecognized.0d40c9be8e254416b4782bf8e19a538f.1234567890.my_field')
-        with self.assertRaises(Exception):
+        with self.assertRaises(AssertionError):
             safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
 
         # Key has unrecognized second component (not a hex string)
         bad_key = db.Key.from_path(
             'KeyValueEntity',
             'usage.not_hex_string.1234567890.my_field')
-        with self.assertRaises(Exception):
+        with self.assertRaises(AssertionError):
             safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
 
         # Key has unrecognized second component (hex string, but not 32 chars)
         bad_key = db.Key.from_path(
             'KeyValueEntity',
             'usage.0123456789abcdef0123456789abcde.1234567890.my_field')
-        with self.assertRaises(Exception):
+        with self.assertRaises(AssertionError):
             safe_key = dbmodels.KeyValueEntity.safe_key(bad_key, self.transform)
+
+    def test_for_export_transforms_value_for_student_data(self):
+        key = self.get_key(
+            xblock.fields.Scope.user_state, '1234567890',
+            '0d40c9be8e254416b4782bf8e19a538f', 'my_field')
+        orig_model = dbmodels.KeyValueEntity(key=key, data='{"value": 1}')
+        safe_model = orig_model.for_export(self.transform)
+        self.assertEquals('tr_{"value": 1}', safe_model.data)
+
+    def test_for_export_does_not_transform_value_for_non_student_data(self):
+        key = self.get_key(
+            xblock.fields.Scope.content, None,
+            '0d40c9be8e254416b4782bf8e19a538f', 'my_field')
+        orig_model = dbmodels.KeyValueEntity(key=key, data='{"value": 1}')
+        safe_model = orig_model.for_export(self.transform)
+        self.assertEquals('{"value": 1}', safe_model.data)
+
+    def test_for_export_rejects_entity_with_bad_key(self):
+        # Key has too few components
+        bad_key = db.Key.from_path(
+            'KeyValueEntity',
+            'usage.0d40c9be8e254416b4782bf8e19a538f')
+        orig_model = dbmodels.KeyValueEntity(key=bad_key, data='{"value": 1}')
+        with self.assertRaises(AssertionError):
+            safe_model = orig_model.for_export(self.transform)
+
+
+class EventEntitySanitizationTests(TestBase):
+    """Tests that ETL's data sanitization methods are implemented correctly."""
+
+    def transform(self, x):
+        return 'tr_' + x
+
+    def test_non_xblock_events_are_unaffected(self):
+        orig_event = m_models.EventEntity(
+            key=db.Key.from_path('EventEntity', 23),
+            source='some-event',
+            user_id='1234567890',
+            data='something happened')
+        safe_event = orig_event.for_export(self.transform)
+        self.assertEquals('something happened', safe_event.data)
+
+    def test_whitelisted_xblock_events_are_unaffected(self):
+        orig_event = m_models.EventEntity(
+            key=db.Key.from_path('EventEntity', 23),
+            source='xblock-event',
+            user_id='1234567890',
+            data=transforms.dumps({
+                'usage': '0123456789abcdef0123456789abcdef',
+                'type': 'sequential',
+                'event': {'position': 1}}))
+        safe_event = orig_event.for_export(self.transform)
+        safe_data = transforms.loads(safe_event.data)
+        self.assertEquals('0123456789abcdef0123456789abcdef', safe_data['usage'])
+        self.assertEquals('sequential', safe_data['type'])
+        self.assertEquals({'position': 1}, safe_data['event'])
+
+    def test_non_whitelisted_xblock_events_are_transformed(self):
+        orig_event = m_models.EventEntity(
+            key=db.Key.from_path('EventEntity', 23),
+            source='xblock-event',
+            user_id='1234567890',
+            data=transforms.dumps({
+                'usage': '0123456789abcdef0123456789abcdef',
+                'type': 'problem',
+                'event': {'value': 1}}))
+        safe_event = orig_event.for_export(self.transform)
+        safe_data = transforms.loads(safe_event.data)
+        self.assertEquals('0123456789abcdef0123456789abcdef', safe_data['usage'])
+        self.assertEquals('problem', safe_data['type'])
+        self.assertEquals('tr_{"value": 1}', safe_data['event'])
 
 
 class RuntimeTestCase(TestBase):

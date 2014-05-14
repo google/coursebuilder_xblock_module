@@ -46,7 +46,21 @@ class KeyValueEntity(entities.BaseEntity):
             'children', 'parent', 'usage', 'definition', 'type', 'all'}
         assert cls._BLOCK_ID_RE.match(key_list[1])
 
+        # If the key is 4 components, then the third component will be a user
+        # id string which must be transformed.
         if len(key_list) == 4:
             key_list[2] = transform_fn(key_list[2])
 
         return db.Key.from_path(cls.kind(), '.'.join(key_list))
+
+    def for_export(self, transform_fn):
+        model = super(KeyValueEntity, self).for_export(transform_fn)
+        key_len = len(model.safe_key.name().split('.'))
+        assert key_len in {3, 4}
+
+        # If the key is 4 components, then the data is in student scope and
+        # must be transformed.
+        if key_len == 4:
+            model.data = transform_fn(model.data)
+
+        return model

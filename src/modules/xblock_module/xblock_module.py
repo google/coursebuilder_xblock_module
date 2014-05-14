@@ -95,6 +95,8 @@ XBLOCK_TEMPLATES_PATH = 'lib/XBlock/xblock/templates'
 # XSRF protection token for handler callbacks
 XBLOCK_XSRF_TOKEN_NAME = 'xblock_handler'
 
+XBLOCK_EVENT_SOURCE_NAME = 'xblock-event'
+
 XBLOCK_WHITELIST = [
     'sequential = cb_xblocks_core.cb_xblocks_core:SequenceBlock',
     'video = cb_xblocks_core.cb_xblocks_core:VideoBlock',
@@ -334,7 +336,7 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             'event': event}
 
         m_models.EventEntity(
-            source='xblock-event',
+            source=XBLOCK_EVENT_SOURCE_NAME,
             user_id=self.user_id,
             data=transforms.dumps(wrapper)).put()
 
@@ -1367,6 +1369,44 @@ class XBlockLocalResourceHandler(webapp2.RequestHandler):
         self.response.write(xblock_class.open_local_resource(resource).read())
 
 
+# Data sanitization section
+
+XBLOCK_EVENT_EXPORT_WHITELIST = {
+    'sequential', 'video', 'cbquestion', 'html', 'vertical'}
+
+_orig_event_entity_for_export = None
+
+
+def _set_new_event_entity_for_export_method():
+    """Register the new for_export method on EventEntity."""
+    global _orig_event_entity_for_export
+    _orig_event_entity_for_export = m_models.EventEntity.for_export
+    m_models.EventEntity.for_export = _event_entity_for_export
+
+
+def _set_orig_event_entity_for_export_method():
+    """Restore the original for_export method on EventEntity."""
+    global _orig_event_entity_for_export
+    m_models.EventEntity.for_export = _orig_event_entity_for_export
+    _orig_event_entity_for_export = None
+
+
+def _event_entity_for_export(model, transform_fn):
+    global _orig_event_entity_for_export
+    model = _orig_event_entity_for_export(model, transform_fn)
+
+    if model.source == XBLOCK_EVENT_SOURCE_NAME:
+        wrapper = transforms.loads(model.data)
+        if wrapper.get('type') not in XBLOCK_EVENT_EXPORT_WHITELIST:
+            model.data = transforms.dumps({
+                'usage': wrapper.get('usage'),
+                'type': wrapper.get('type'),
+                'event': transform_fn(transforms.dumps(wrapper.get('event')))
+            })
+
+    return model
+
+
 # Module registration section
 
 
@@ -1383,6 +1423,7 @@ def register_module():
                 dbmodels.DefinitionEntity, dbmodels.UsageEntity,
                 dbmodels.KeyValueEntity, RootUsageEntity]:
             courses.COURSE_CONTENT_ENTITIES.remove(entity)
+        _set_orig_event_entity_for_export_method()
 
     def on_module_enabled():
         _add_editor_to_dashboard()
@@ -1394,6 +1435,7 @@ def register_module():
         courses.COURSE_CONTENT_ENTITIES += [
             dbmodels.DefinitionEntity, dbmodels.UsageEntity,
             dbmodels.KeyValueEntity, RootUsageEntity]
+        _set_new_event_entity_for_export_method()
 
     global_routes = [
         (RESOURCES_URI + '/.*', tags.ResourcesHandler),
