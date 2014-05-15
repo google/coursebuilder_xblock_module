@@ -96,6 +96,7 @@ XBLOCK_TEMPLATES_PATH = 'lib/XBlock/xblock/templates'
 XBLOCK_XSRF_TOKEN_NAME = 'xblock_handler'
 
 XBLOCK_EVENT_SOURCE_NAME = 'xblock-event'
+XBLOCK_TAG_EVENT_SOURCE_NAME = 'tag-xblock-event'
 
 XBLOCK_WHITELIST = [
     'sequential = cb_xblocks_core.cb_xblocks_core:SequenceBlock',
@@ -1403,6 +1404,13 @@ def _event_entity_for_export(model, transform_fn):
                 'type': wrapper.get('type'),
                 'event': transform_fn(transforms.dumps(wrapper.get('event')))
             })
+    elif model.source == XBLOCK_TAG_EVENT_SOURCE_NAME:
+        wrapper = transforms.loads(model.data)
+        model.data = transforms.dumps({
+            'event': wrapper.get('event'),
+            'message': transform_fn(wrapper.get('message')),
+            'location': wrapper.get('location'),
+            'data': transform_fn(transforms.dumps(wrapper.get('data')))})
 
     return model
 

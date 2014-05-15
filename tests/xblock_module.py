@@ -319,6 +319,26 @@ class EventEntitySanitizationTests(TestBase):
         self.assertEquals('problem', safe_data['type'])
         self.assertEquals('tr_{"value": 1}', safe_data['event'])
 
+    def test_tag_xblock_events_are_sanitized(self):
+        orig_event = m_models.EventEntity(
+            key=db.Key.from_path('EventEntity', 23),
+            source='tag-xblock-event',
+            user_id='1234567890',
+            data=transforms.dumps({
+                'event': 'xblock-problem',
+                'message': 'Problem Checked',
+                'location': 'http://my.app/new_course/unit?unit=1&lesson=3',
+                'data': {
+                    'problem_id': 'X',
+                    'answers': 'input_X_2_1=1'}}))
+        safe_event = orig_event.for_export(self.transform)
+        safe_data = transforms.loads(safe_event.data)
+        self.assertEquals(safe_data, {
+            'event': 'xblock-problem',
+            'message': 'tr_Problem Checked',
+            'location': 'http://my.app/new_course/unit?unit=1&lesson=3',
+            'data': 'tr_{"problem_id": "X", "answers": "input_X_2_1=1"}'})
+
 
 class RuntimeTestCase(TestBase):
     """Functional tests for the XBlock runtime."""
