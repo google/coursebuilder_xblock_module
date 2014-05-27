@@ -579,9 +579,7 @@ class GuestUserTestCase(TestBase):
         return int(sequence_elt.find(
             './div[@class="sequence_block"]').attrib['data-position'])
 
-    def test_guest_user(self):
-        self.assertIsNone(users.get_current_user())
-
+    def assert_guest_user(self):
         # The guest user can view the page
         sequence_elt = self._get_xblock_in_lesson()
         xsrf_token = sequence_elt.attrib['data-xsrf-token']
@@ -611,8 +609,17 @@ class GuestUserTestCase(TestBase):
         rt = xblock_module.Runtime(MockHandler(), student_id=student_id)
         self.assertEqual(1, rt.get_block(self.usage_id).position)
 
-    def test_logged_in_user(self):
+    def test_user_not_in_session_is_guest_user(self):
+        self.assertIsNone(users.get_current_user())
+        self.assert_guest_user()
+
+    def test_unregistered_user_in_session_is_guest_user(self):
         actions.login('user@example.com')
+        self.assert_guest_user()
+
+    def test_registered_user_is_not_guest(self):
+        actions.login('user@example.com')
+        m_models.Student.add_new_student_for_current_user('User', None)
         student_id = users.get_current_user().user_id()
         self.assertIsNotNone(student_id)
 
@@ -1486,12 +1493,15 @@ class XBlockTagTestCase(TestBase):
         def get_user(self):
             class User(object):
                 def user_id(self):
+                    return '11223344556677889900'
+                def email(self):
                     return 'student@example.com'
             return User()
 
     def setUp(self):
         super(XBlockTagTestCase, self).setUp()
         actions.login('student@example.com', is_admin=False)
+        m_models.Student.add_new_student_for_current_user('Student', None)
 
     def test_render(self):
         root_usage_id = insert_thumbs_block()

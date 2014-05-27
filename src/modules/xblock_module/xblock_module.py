@@ -429,11 +429,7 @@ class XBlockActionHandler(utils.BaseHandler):
             return urllib.unquote(
                 body[:-1]) if body and body[-1] == '=' else body
 
-        if self.get_user() is not None:
-            student_id = self.get_user().user_id()
-        else:
-            student_id = get_session_id_for_guest_user(self)
-
+        student_id = get_enrolled_user_id_or_guest_user_id(self)
         token = self.request.get('xsrf_token')
         if not utils.XsrfTokenManager.is_xsrf_token_valid(
                 token, XBLOCK_XSRF_TOKEN_NAME):
@@ -1279,6 +1275,27 @@ def get_session_id_for_guest_user(handler):
     return 'guest-%s' % session_cookie
 
 
+def get_enrolled_user_id_or_guest_user_id(handler):
+    """Return a workable user id in every case.
+
+    If there is a user in session who has registered for the course, then return
+    their user id. Otherwise return a guest user id.
+
+    Args:
+        handler: BaseHandler. The request handler for the user session.
+
+    Returns:
+        string. A user ID.
+    """
+    user = handler.get_user()
+    if user is None:
+        return get_session_id_for_guest_user(handler)
+    elif m_models.Student.get_enrolled_student_by_email(user.email()) is None:
+        return get_session_id_for_guest_user(handler)
+    else:
+        return str(user.user_id())
+
+
 class XBlockTag(tags.ContextAwareTag):
     binding_name = 'xblock'
 
@@ -1312,12 +1329,7 @@ class XBlockTag(tags.ContextAwareTag):
     def render(self, node, context):
         root_id = node.attrib.get('root_id')
         usage_id = RootUsageDao.load(root_id).usage_id
-
-        if context.handler.get_user() is not None:
-            student_id = context.handler.get_user().user_id()
-        else:
-            student_id = get_session_id_for_guest_user(context.handler)
-
+        student_id = get_enrolled_user_id_or_guest_user_id(context.handler)
         runtime = Runtime(context.handler, student_id=student_id)
         block = runtime.get_block(usage_id)
         fragment = runtime.render(block, 'student_view')
