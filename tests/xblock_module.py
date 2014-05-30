@@ -26,6 +26,7 @@ from xml.etree import cElementTree
 from controllers import sites
 from controllers import utils
 import html5lib
+from models import config
 from models import courses
 from models import transforms
 import models.models as m_models
@@ -461,6 +462,45 @@ class RuntimeTestCase(TestBase):
         except xblock_module.ForbiddenXBlockError:
             pass  # Expected exception
 
+    def test_publish_logs_events(self):
+        student_id = 'the_student'
+        rt = xblock_module.Runtime(
+            MockHandler(), student_id=student_id, is_admin=True)
+        usage_id = parse_xml_string(rt, '<html>Test</html>')
+        block = rt.get_block(usage_id)
+        xblock_event_data = {'data': 1234}
+
+        rt.publish(block, xblock_event_data)
+
+        expected_event_data = {
+            'usage': usage_id,
+            'type': 'html',
+            'event': xblock_event_data}
+
+        event = m_models.EventEntity.all().fetch(1)[0]
+        self.assertEqual(student_id, event.user_id)
+        self.assertEqual('xblock-event', event.source)
+        self.assertEqual(expected_event_data, transforms.loads(event.data))
+
+    def test_publish_does_not_log_events_when_tag_events_disabled(self):
+        try:
+            config.Registry.test_overrides[
+                utils.CAN_PERSIST_TAG_EVENTS.name] = False
+            student_id = 'the_student'
+            rt = xblock_module.Runtime(
+                MockHandler(), student_id=student_id, is_admin=True)
+            usage_id = parse_xml_string(rt, '<html>Test</html>')
+            block = rt.get_block(usage_id)
+            xblock_event_data = {'data': 1234}
+
+            rt.publish(block, xblock_event_data)
+
+            events = m_models.EventEntity.all().fetch(1)
+            self.assertEqual(0, len(events))
+        finally:
+            config.Registry.test_overrides[
+                utils.CAN_PERSIST_TAG_EVENTS.name] = True
+
 
 class XBlockActionHandlerTestCase(TestBase):
     """Functional tests for the XBlock callback handler."""
@@ -507,6 +547,8 @@ class GuestUserTestCase(TestBase):
         super(GuestUserTestCase, self).setUp()
 
         actions.login('user@example.com', is_admin=True)
+
+        config.Registry.test_overrides[utils.CAN_PERSIST_TAG_EVENTS.name] = True
 
         # Create a course in namespace "test"
         sites.setup_courses('course:/test::ns_test, course:/:/')

@@ -328,6 +328,12 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             XBLOCK_LOCAL_RESOURCES_URI, block.scope_ids.block_type, uri)
 
     def publish(self, block, event):
+        """Log an XBlock event to the event stream.
+
+        Args:
+            block: XBlock. The XBlock which emitted the event.
+            event: dict. A JSON serializable dict containing the event data.
+        """
         if self.user_id is None:
             return
 
@@ -336,10 +342,11 @@ class Runtime(appengine_xblock_runtime.runtime.Runtime):
             'type': block.scope_ids.block_type,
             'event': event}
 
-        m_models.EventEntity(
-            source=XBLOCK_EVENT_SOURCE_NAME,
-            user_id=self.user_id,
-            data=transforms.dumps(wrapper)).put()
+        if utils.CAN_PERSIST_TAG_EVENTS.value:
+            m_models.EventEntity(
+                source=XBLOCK_EVENT_SOURCE_NAME,
+                user_id=self.user_id,
+                data=transforms.dumps(wrapper)).put()
 
     def parse_xml_string(
             self, xml_str, unused_id_generator, orig_xml_str=None,
