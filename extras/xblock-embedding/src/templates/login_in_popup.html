@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <script type="text/javascript">
+      var studentId = '{{ student_id }}';
+      window.opener.postMessage({action: 'login', studentId: studentId}, '*');
+      window.close();
+    </script>
+  </head>
+  <body>
+  </body>
+</html>
